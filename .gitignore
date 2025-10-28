@@ -1,3 +1,10 @@
 venv/
 __pycache__/
 models/
+images/
+generated_images/
+chat_history.txt
+requirements.txt
+session_log.json
+config.json
+

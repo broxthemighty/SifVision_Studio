@@ -1,5 +1,0 @@
-llama-cpp-python
-pyttsx3
-tk
-Pillow
-sqlite3
