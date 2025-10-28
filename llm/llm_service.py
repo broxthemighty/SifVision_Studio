@@ -5,6 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 from functools import lru_cache
 from audio.tts_service import TTSService
+from typing import Optional, Dict          # if not present
+from copy import deepcopy                  # snapshot()
+import torch, gc                           # GPU suspend/resume
+from vision.image_gen import generate_image # concept image
 
 class LlmService:
     """
@@ -24,6 +28,15 @@ class LlmService:
         if prompt_text:
             self.responses.system_prompt = prompt_text
         self.tts = TTSService(enabled=False)  # audio off by default
+        last_model = self.load_last_model()
+        if last_model:
+            try:
+                print(f"[INFO] Loading last model from file: {last_model}")
+                self.responses = LlamaEngine(model_path=last_model, n_gpu_layers=100)
+                if prompt_text:
+                    self.responses.system_prompt = prompt_text
+            except Exception as e:
+                print(f"[WARN] Could not load saved model: {e}")
 
     # ------------------- COMMANDS (Mutate State) -------------------
 
@@ -68,6 +81,7 @@ class LlmService:
         try:
             print(f"Loading new model: {model_path} with {gpu_layers} GPU layers")
             self.responses = LlamaEngine(model_path=model_path, n_gpu_layers=gpu_layers)
+            self.save_last_model(model_path)  # NEW
             return f"Model loaded with GPU acceleration: {model_path}"
         except Exception as e:
             return f"Error loading model: {e}"
@@ -254,6 +268,100 @@ class LlmService:
             os.remove("session_log.json")
         self.responses.reset_context()
         return "Session has been refreshed."
+    
+    def save_last_model(self, model_path: str):
+        try:
+            with open("model.txt", "w", encoding="utf-8") as f:
+                f.write(model_path.strip())
+            print(f"[INFO] Saved model path to model.txt: {model_path}")
+        except Exception as e:
+            print(f"[WARN] Could not save model path: {e}")
+
+    def load_last_model(self) -> str:
+        import os
+        if os.path.exists("model.txt"):
+            try:
+                with open("model.txt", "r", encoding="utf-8") as f:
+                    val = f.read().strip()
+                    if val:
+                        print(f"[INFO] Loaded last model: {val}")
+                        return val
+            except Exception as e:
+                print(f"[WARN] Could not read model.txt: {e}")
+        return ""
+    
+    def suspend_llm(self):
+        try:
+            if hasattr(self, "responses") and getattr(self.responses, "llm", None):
+                print("[INFO] Suspending LLM GPU context...")
+                if hasattr(self.responses.llm, "free"):
+                    try: self.responses.llm.free()
+                    except Exception: pass
+                torch.cuda.empty_cache()
+                gc.collect()
+        except Exception as e:
+            print(f"[WARN] Could not suspend LLM: {e}")
+
+    def resume_llm(self):
+        try:
+            print("[INFO] Resuming LLM GPU context...")
+            torch.cuda.empty_cache()
+        except Exception as e:
+            print(f"[WARN] Could not resume LLM: {e}")
+
+    def generate_concept_image(
+        self,
+        user_text: str | None = None,
+        steps: int = 20,
+        guidance: float = 7.5,
+        width: int = 512,
+        height: int = 512,
+        model_name: str = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
+        progress_callback=None,
+        init_image: str | None = None
+    ) -> str:
+        text = (user_text or "").strip()
+        if not text or text.lower() in {"continue", "go on", "more", "next"}:
+            if getattr(self.responses, "context", None):
+                for turn in reversed(self.responses.context):
+                    cand = (turn.get("user") or "").strip()
+                    if cand:
+                        text = cand
+                        break
+        if not text:
+            text = "A helpful academic concept"
+
+        positive = (
+            "educational infographic illustrating the following conversation context, "
+            "clean vector art, minimal text, clear labeled boxes and arrows, "
+            "white background, professional flat design, "
+            "topic and explanation combined: "
+            f"{text}"
+        )
+        negative = (
+            "gibberish text, misspelled words, watermark, logo, noisy background, "
+            "artifacts, photo, 3D render, low contrast, clutter, nsfw"
+        )
+
+        # optionally free VRAM before SD
+        self.suspend_llm()
+        try:
+            path = generate_image(
+                prompt=positive,
+                steps=steps,
+                guidance=guidance,
+                size=(width, height),
+                model_name=model_name,
+                progress_callback=progress_callback,
+                negative_prompt=negative,
+                seed=42,
+                init_image=init_image
+            )
+        finally:
+            self.resume_llm()
+
+        print(f"[INFO] Image successfully generated at {path}")
+        return path
 
 class LlamaEngine:
     """

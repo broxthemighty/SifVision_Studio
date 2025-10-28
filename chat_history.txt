@@ -1,0 +1,8 @@
+You: Please describe your office to me.
+Verita: Well, my office is a cozy little room with comfy chairs and soft lighting. It's the perfect place to relax and unwind after a long day of studying or working on projects.
+
+
+You: Could you describe your office to me for image generation?
+Verita: My office is a cozy room with plush furniture, warm lighting, and soft colors. It's the perfect space to relax or get some work done in a quiet environment.
+
+Tip: Click “🖼 Generate Image” to create a diagram.

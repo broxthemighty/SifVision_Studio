@@ -24,11 +24,12 @@ This file does NOT contain data storage logic. Instead:
 import json                            # for save/load functionality
 import csv                             # excel file output
 import tkinter as tk
-from tkinter import filedialog         # standard Tkinter dialogs
+from tkinter import filedialog, ttk         # standard Tkinter dialogs
 
 # local
 from memory.domain_models import EntryType           # domain layer EntryType
 from llm.llm_service import LlmService
+import threading
 
 
 class AutoScrollbar(tk.Scrollbar):
@@ -204,6 +205,37 @@ class App:
         )
         audio_chk.pack(pady=(20, 5), anchor="w")
 
+        # image settings button
+        img_settings_btn = tk.Button(
+            buttons_frame,
+            text="⚙ Image\n Settings",
+            command=self.open_image_settings
+        )
+        img_settings_btn.pack(pady=(20, 5), anchor="w")
+
+        # guidance checkbox (use current avatar as init image, if you wire it later)
+        self.use_guidance_var = tk.BooleanVar(value=False)
+        guidance_chk = tk.Checkbutton(
+            buttons_frame,
+            text="Current\n Image for\nGuidance",
+            variable=self.use_guidance_var,
+            anchor="w"
+        )
+        guidance_chk.pack(pady=(5, 10), anchor="w")
+
+        # generate image
+        gen_img_btn = tk.Button(
+            buttons_frame,
+            text="🖼 Generate\n Image",
+            command=lambda: self.generate_image_from_prompt()
+        )
+        gen_img_btn.pack(pady=(20, 5), anchor="w")
+
+        # progress bar
+        self.progress = ttk.Progressbar(buttons_frame, orient="horizontal", length=70, mode="determinate")
+        self.progress.pack(pady=(10, 5), anchor="w")
+        self.progress["value"] = 0
+
         # bottom row: ai input and responses output box ---
         ai_frame = tk.Frame(main_frame)
         ai_frame.grid(row=3, column=0, sticky="ew", pady=(0, 5), padx=(0, 5))
@@ -292,7 +324,24 @@ class App:
         # initial render from service
         self.render_summary()
 
+        self.img_settings = {
+            "steps": 22,
+            "guidance": 7.5,
+            "width": 512,
+            "height": 512,
+            "model": "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"
+        }
+
     # ------------------- HELPERS -------------------
+    def show_async_error(self, title: str, exception: Exception):
+        """
+        Safely display an exception message from a background thread.
+        """
+        import traceback
+        tb = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
+        self.root.after(0, lambda: self.custom_message_popup(title, tb, msg_type="error"))
+
+    
     def custom_input_popup(
     self,
     title: str,
@@ -523,6 +572,10 @@ class App:
             # update chat output
             self.ai_output_box.config(state="normal")
             self.ai_output_box.insert(insert_start, f"Verita: {reply_text}\n\n")
+            if any(w in user_input.lower() for w in ["diagram", "image", "visualize", "show me", "picture"]):
+                self.ai_output_box.insert(tk.END, "Tip: Click “🖼 Generate Image” to create a diagram.\n\n")
+            else:
+                self.ai_output_box.insert(tk.END, "\n")
             self.ai_output_box.see(tk.END)
             self.ai_output_box.config(state="disabled")
 
@@ -1004,4 +1057,71 @@ class App:
                     ])
         self.custom_message_popup("Exported", f"Entries exported to {file_path}", msg_type="info")
 
+    def open_image_settings(self):
+        win = tk.Toplevel(self.root)
+        win.title("Image Settings")
+        self.center_popup(win, 320, 240)
+
+        # fields: steps, guidance, width, height, model
+        labels = ["Steps", "Guidance", "Width", "Height", "Model"]
+        keys   = ["steps", "guidance", "width", "height", "model"]
+        entries = {}
+
+        for i, (lbl, key) in enumerate(zip(labels, keys)):
+            tk.Label(win, text=lbl).grid(row=i, column=0, sticky="e", padx=8, pady=6)
+            e = tk.Entry(win, width=22)
+            e.grid(row=i, column=1, sticky="w", padx=8, pady=6)
+            e.insert(0, str(self.img_settings[key]))
+            entries[key] = e
+
+        def save():
+            try:
+                self.img_settings["steps"]    = int(entries["steps"].get())
+                self.img_settings["guidance"] = float(entries["guidance"].get())
+                self.img_settings["width"]    = int(entries["width"].get())
+                self.img_settings["height"]   = int(entries["height"].get())
+                self.img_settings["model"]    = entries["model"].get().strip()
+                win.destroy()
+                self.custom_message_popup("Saved", "Image settings updated.")
+            except Exception as e:
+                self.custom_message_popup("Error", f"Bad input: {e}", msg_type="error")
+
+        tk.Button(win, text="Save", command=save).grid(row=len(labels), column=0, columnspan=2, pady=10)
             
+    def generate_image_from_prompt(self):
+        prompt_text = self.ai_entry.get().strip()
+        init_img = None
+        # if you want to pass current avatar when the checkbox is on:
+        if getattr(self, "use_guidance_var", None) and self.use_guidance_var.get():
+            # wire this to a current avatar path if/when you manage one on disk
+            init_img = getattr(self, "current_image_path", None)
+
+        # run on a worker thread so UI stays responsive
+        def run():
+            try:
+                def on_progress(p):
+                    self.root.after(0, lambda: self.progress.configure(value=p))
+                path = self.service.generate_concept_image(
+                    user_text=prompt_text,
+                    steps=self.img_settings["steps"],
+                    guidance=self.img_settings["guidance"],
+                    width=self.img_settings["width"],
+                    height=self.img_settings["height"],
+                    model_name=self.img_settings["model"],
+                    progress_callback=on_progress,
+                    init_image=init_img
+                )
+                # show the image in the left panel if present
+                try:
+                    from PIL import Image, ImageTk
+                    img = Image.open(path).resize((512, 512))
+                    self.image = ImageTk.PhotoImage(img)
+                    self.image_label.config(image=self.image)
+                except Exception as e:
+                    self.custom_message_popup("Image", f"Generated: {path}\n(Preview failed: {e})")
+            except Exception as e:
+                self.show_async_error("Image Generation Failed", e)
+            finally:
+                self.root.after(0, lambda: self.progress.configure(value=0))
+
+        threading.Thread(target=run, daemon=True).start()
