@@ -1,6 +1,0 @@
-{
-  "model_path": "./models/llama-3-8b.gguf",
-  "tts_enabled": true,
-  "auto_generate_image": false,
-  "theme": "light"
-}
