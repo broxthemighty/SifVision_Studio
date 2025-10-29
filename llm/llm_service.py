@@ -12,6 +12,7 @@ from vision.image_gen import generate_image, generate_image_diffusers # concept 
 import os
 from app_core.config_manager import ConfigManager
 from pathlib import Path
+import random
 
 def resolve_model_path(model_name: str, model_type: str = "chat") -> str:
     """
@@ -327,8 +328,10 @@ class LlmService:
         import os
         if os.path.exists("session_log.json"):
             os.remove("session_log.json")
+        new_prompt = self.get_prompt()
         self.responses.reset_context()
-        return "Session has been refreshed."
+        self.responses.system_prompt = new_prompt
+        return "Session has been refreshed with updated system prompt."
     
     def save_last_model(self, model_path: str):
         try:
@@ -383,15 +386,16 @@ class LlmService:
         init_image: str | None = None,
     ) -> str:
         text = (user_text or "").strip()
-        if not text or text.lower() in {"continue", "go on", "more", "next"}:
+        # --- Make image prompt context-aware ---
+        if not user_text:
             if getattr(self.responses, "context", None):
-                for turn in reversed(self.responses.context):
-                    cand = (turn.get("user") or "").strip()
-                    if cand:
-                        text = cand
-                        break
-        if not text:
-            text = "A sexy advisor"
+                # Combine the last 2–3 exchanges for richer semantic context
+                context_snippets = [
+                    turn.get("user", "") for turn in self.responses.context[-3:] if turn.get("user")
+                ]
+                user_text = " ".join(context_snippets).strip()
+        if not user_text:
+            user_text = "A sexy full-body image of Verita."
             
         if not style:
             style = "sexy"
@@ -406,11 +410,15 @@ class LlmService:
                     return f.read().strip()
             return ""
 
-        positive_extra = read_prompt(positive_path)
-        negative_extra = read_prompt(negative_path)
+        positive = f"{read_prompt(positive_path)}, Concept: {user_text}, full body, {style or 'realistic detailed'}"
+        negative = f"{read_prompt(negative_path)}, cropped, close-up, duplicate, deformed"
 
-        positive += ", " + positive_extra
-        negative += ", " + negative_extra
+        cfg = ConfigManager().load()
+        avatar_path = cfg["app"].get("avatar_image")
+
+        init_image = None
+        if avatar_path and os.path.exists(avatar_path):
+            init_image = avatar_path
 
         # optionally free VRAM before SD
         self.suspend_llm()
@@ -431,7 +439,7 @@ class LlmService:
                     model_name=model_path,
                     progress_callback=progress_callback,
                     negative_prompt=negative,
-                    seed=42,
+                    seed = random.randint(0, 999999),
                     init_image=init_image,
                     style=style
                 )
@@ -445,7 +453,7 @@ class LlmService:
                     model_name=model_path,
                     progress_callback=progress_callback,
                     negative_prompt=negative,
-                    seed=42,
+                    seed = random.randint(0, 999999),
                     init_image=init_image,
                     style=style
                 )
@@ -454,6 +462,13 @@ class LlmService:
 
         print(f"[INFO] Image successfully generated at {path}")
         return path
+    
+    def reset_context(self, system_prompt: str = None):
+        """Reset internal context and optionally update system prompt."""
+        self.chat_history = []
+        if system_prompt:
+            self.system_prompt = system_prompt
+        print("[INFO] LLM context reset with new prompt.")
 
 class LlamaEngine:
     """
@@ -538,10 +553,12 @@ class LlamaEngine:
         for msg in self.context[-2:]:
             convo += f"User: {msg['user']}\nAssistant: {msg['ai']}\n"
 
-        # Short, role reminder (1 line)
-        role_hint = "Answer directly and concisely."
-
-        return f"{role_hint}\n{convo}User: {user_text}\nAssistant:"
+        return (
+            f"System Prompt: {self.system_prompt.strip()}\n"
+            f"{convo}"
+            f"User: {user_text.strip()}\n"
+            f"Assistant:"
+        )
     
     def reply(self, user_text: str) -> str:
         """

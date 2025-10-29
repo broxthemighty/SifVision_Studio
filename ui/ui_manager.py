@@ -1004,31 +1004,30 @@ class App:
         try:
             from PIL import Image, ImageTk
 
-            # fixed display box dimensions
             target_width = 512
             target_height = 512
 
-            # open the selected image
             img = Image.open(file_path)
-
-            # calculate proportional resize to fit within the target box
             img.thumbnail((target_width, target_height), Image.LANCZOS)
 
-            # create a new blank image (with transparent or black background) that matches the fixed display box size
             from PIL import ImageOps
             fixed_img = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
             img_x = (target_width - img.width) // 2
             img_y = (target_height - img.height) // 2
             fixed_img.paste(img, (img_x, img_y))
 
-            # convert to Tkinter-compatible image 
             self.image = ImageTk.PhotoImage(fixed_img)
-
-            # update the existing label image
             self.image_label.config(image=self.image, width=target_width, height=target_height)
 
-            # confirmation popup
-            self.custom_message_popup("Avatar Changed", "AI avatar updated successfully.")
+            # --- ✅ persist new avatar path in memory + settings.json ---
+            self.current_image_path = file_path
+            self.config["app"]["avatar_image"] = file_path  # update in-memory settings
+
+            cfg = ConfigManager()
+            cfg.data = self.config  # assign the current updated config
+            cfg.save()              # write to config/settings.json
+
+            self.custom_message_popup("Avatar Changed", "AI avatar updated successfully and saved.")
         except Exception as e:
             self.custom_message_popup("Error", f"Failed to change avatar: {e}", msg_type="error")
         
@@ -1050,6 +1049,10 @@ class App:
         if new_prompt:
             self.service.set_prompt(new_prompt)
             self.custom_message_popup("Prompt Saved", "System prompt updated successfully.")
+            # refresh LLM context to apply new system prompt immediately
+            if hasattr(self.service, "responses") and hasattr(self.service.responses, "reset_context"):
+                self.service.responses.reset_context(system_prompt=new_prompt)
+                self.custom_message_popup("Prompt Applied", "New prompt applied to current chat session.")
 
     def save_prompt(self):
         """
@@ -1159,8 +1162,11 @@ class App:
         # if you want to pass current avatar when the checkbox is on:
         if getattr(self, "use_guidance_var", None) and self.use_guidance_var.get():
             # wire this to a current avatar path if/when you manage one on disk
-            init_img = getattr(self, "current_image_path", None)
-
+            avatar_path = self.config["app"].get("avatar_image")
+            if avatar_path and os.path.exists(avatar_path):
+                init_img = avatar_path
+                print(f"[DEBUG] Using current avatar as init image: {avatar_path}")
+        self.config = ConfigManager().load()
         # run on a worker thread so UI stays responsive
         def run():
             try:

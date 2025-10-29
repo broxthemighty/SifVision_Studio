@@ -14,6 +14,7 @@ from diffusers import (
     StableDiffusionXLImg2ImgPipeline
 )
 from app_core.config_manager import ConfigManager
+import random
 
 # current file's directory
 base_dir = Path(__file__).parent
@@ -80,99 +81,56 @@ def generate_image(
     output_dir="generated_images",
     steps=20,
     guidance=7.5,
-    size=(512, 512),
+    size=(512, 768),
     model_name="stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
     device="cuda",
     progress_callback=None,
     negative_prompt=None,
-    seed=42,
+    seed=None,
     init_image=None,
     strength=0.55,
     style=None
 ):
-    """
-    Use stable-diffusion.cpp to generate an image locally, streaming progress.
-    """
+    """Generate an image using stable-diffusion.cpp or diffusers if available."""
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
-
     model_path = _resolve_model_path(model_name)
 
-    # GPU availability check 
-    gpu_available = torch.cuda.is_available()
-    device_used = "cuda" if gpu_available else "cpu"
-    print(f"[INFO] Image generation using device: {device_used}")
-
-    # let sd.exe know you want CUDA if supported
-    if gpu_available:
-        cmd_device_flag = ["--rng", "cuda"]
-    else:
-        cmd_device_flag = ["--rng", "std_default"]
-
-    cmd = [
-        SD_EXE,
-        "--prompt", prompt,
-        "--output", out_path,
-        "--steps", str(steps),
-        "--cfg-scale", str(guidance),
-        "--width", str(size[0]),
-        "--height", str(size[1]),
-        "--model", model_path,
-        "--seed", str(seed)
-    ]
+    # use random seed if not specified
+    seed = seed or random.randint(0, 999999)
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
 
     if init_image and os.path.exists(init_image):
-        # cmd += ["--init-img", init_image, "--strength", "0.6"]
-        pipe = StableDiffusionImg2ImgPipeline.from_single_file(model_path, torch_dtype=torch.float16).to("cuda")
-        result = pipe(prompt=prompt, image=Image.open(init_image), strength=strength, guidance_scale=guidance)
+        print(f"[INFO] Running image-to-image using avatar: {init_image}")
+        pipe = StableDiffusionImg2ImgPipeline.from_single_file(model_path, torch_dtype=torch_dtype).to(device)
+        image = Image.open(init_image).convert("RGB").resize(size)
+        result = pipe(
+            prompt=prompt,
+            image=image,
+            strength=strength,
+            guidance_scale=guidance,
+            num_inference_steps=steps,
+            negative_prompt=negative_prompt,
+            generator=torch.Generator(device).manual_seed(seed)
+        )
     else:
-        pipe = StableDiffusionPipeline.from_single_file(model_path, torch_dtype=torch.float16).to("cuda")
-        result = pipe(prompt=prompt, num_inference_steps=steps, guidance_scale=guidance)
-    if negative_prompt:
-        cmd += ["--negative-prompt", negative_prompt]
+        print(f"[INFO] Running text-to-image (no init).")
+        pipe = StableDiffusionPipeline.from_single_file(model_path, torch_dtype=torch_dtype).to(device)
+        result = pipe(
+            prompt=prompt,
+            guidance_scale=guidance,
+            num_inference_steps=steps,
+            height=size[1],
+            width=size[0],
+            negative_prompt=negative_prompt,
+            generator=torch.Generator(device).manual_seed(seed)
+        )
 
-    cmd += cmd_device_flag
-
-    print("[INFO] Running:", " ".join(cmd))
-
-    try:
-        # stream stdout so we can parse progress
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-
-        for line in process.stdout:
-            line = line.strip()
-            if not line:
-                continue
-            # mirror CLI logs to console
-            sys.stdout.write(line + "\n")
-            sys.stdout.flush()
-
-            # match both: "[5/22]" and "5/22 - 6.2s/it"
-            m = re.search(r"\b(\d+)\s*/\s*(\d+)\b", line)
-            if m and progress_callback:
-                step, total = int(m.group(1)), int(m.group(2))
-                if total > 0:
-                    progress_callback(int(step * 100 / total))
-
-        process.wait()
-
-        if process.returncode == 0 and os.path.exists(out_path):
-            print(f"[INFO] Image saved: {out_path}")
-            if progress_callback:
-                progress_callback(100)
-            if "network" in prompt.lower() or "firewall" in prompt.lower() or "diagram" in prompt.lower():
-                out_path = annotate_image(out_path)
-            return out_path
-        else:
-            raise RuntimeError("Stable Diffusion failed to produce output.")
-
-    except Exception as e:
-        print(f"[ERROR] Generation failed: {e}")
-        fail_path = os.path.join(output_dir, "generation_failed.png")
-        Image.new("RGB", (512, 512), (255, 0, 0)).save(fail_path)
-        if progress_callback:
-            progress_callback(0)
-        return fail_path
+    result.images[0].save(out_path)
+    if progress_callback:
+        progress_callback(100)
+    print(f"[INFO] Image saved: {out_path} | Seed: {seed}")
+    return out_path
 
 def generate_image_diffusers(
     prompt,
@@ -256,6 +214,8 @@ def generate_image_diffusers(
     if progress_callback:
         progress_callback(100)
     print(f"[INFO] Image saved: {out_path}")
+    result.images[0].save(out_path)
+    print(f"[INFO] Image saved with seed {seed}")
     return out_path
 
 def annotate_image(image_path, labels=None, output_path=None):

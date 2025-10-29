@@ -50,8 +50,26 @@ class ConfigManager:
         self.data = data
         return self.data
 
-    def save(self):
-        self._write(self.data)
+    def save(self, data=None):
+        """Save configuration safely to settings.json"""
+        try:
+            # Choose what to save
+            config_to_save = data or self.data
+
+            if not config_to_save or not isinstance(config_to_save, dict):
+                print("[WARN] Skipping save: empty or invalid config object.")
+                return
+
+            if "app" not in config_to_save:
+                print("[WARN] Skipping save: missing 'app' key.")
+                return
+
+            os.makedirs(self.path.parent, exist_ok=True)
+            with open(self.path, "w", encoding="utf-8") as f:
+                json.dump(config_to_save, f, indent=4)
+            print(f"[INFO] Config saved to {self.path}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save config: {e}")
 
     def _write(self, obj):
         os.makedirs(self.path.parent, exist_ok=True)
