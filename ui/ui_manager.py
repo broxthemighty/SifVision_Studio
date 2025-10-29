@@ -105,17 +105,17 @@ class App:
         top_frame.columnconfigure(0, weight=1)
 
         # main title label
-        self.display_label = tk.Label(
+        """self.display_label = tk.Label(
             top_frame,
             text="Welcome to Learnflow\nMy name is Verita",
             font=("Georgia", 14),
             pady=2,
             justify="left",
         )
-        self.display_label.grid(row=0, column=0, sticky="w")
+        self.display_label.grid(row=0, column=0, sticky="w")"""
 
         # frame to hold summary text and scrollbar (so scrollbar can hide itself if not needed)
-        summary_container = tk.Frame(top_frame)
+        """summary_container = tk.Frame(top_frame)
         summary_container.grid(row=0, column=2, padx=(5, 5), sticky="n")
 
         # auto-hiding vertical scrollbar for the summary box
@@ -145,7 +145,7 @@ class App:
         self.clear_button = tk.Button(
             top_frame, text="Clear", width=7, command=self.clear_entries
         )
-        self.clear_button.grid(row=0, column=1, sticky="w", padx=(5, 2))
+        self.clear_button.grid(row=0, column=1, sticky="w", padx=(5, 2))"""
 
         # attach a menubar
         self.build_menu()
@@ -187,13 +187,13 @@ class App:
         buttons_frame.pack(side="left", anchor="n", padx=(0, 5))
 
         # create one button per EntryType
-        for et in (EntryType.Goal, EntryType.Skill, EntryType.Session, EntryType.Notes):
+        """for et in (EntryType.Goal, EntryType.Skill, EntryType.Session, EntryType.Notes):
             tk.Button(
                 buttons_frame,
                 text=et.value,
                 width=10,
                 command=lambda t=et: self.on_add_or_edit_entry(t),
-            ).pack(pady=2, anchor="w")
+            ).pack(pady=2, anchor="w")"""
 
         # tts audio checkbox
         self.audio_var = tk.BooleanVar(value=False)
@@ -235,46 +235,85 @@ class App:
         self.progress = ttk.Progressbar(buttons_frame, orient="horizontal", length=70, mode="determinate")
         self.progress.pack(pady=(10, 5), anchor="w")
         self.progress["value"] = 0
+        
+        tk.Button(
+            buttons_frame,
+            text="Clear\nImages",
+            bg="#444444",
+            fg="#ffffff",
+            activebackground="#666666",
+            activeforeground="#ffffff",
+            command=lambda: [child.destroy() for child in self.images_inner.winfo_children()]
+        ).pack(pady=(0, 5))
+        
+         # --- Rightmost frame for generated images ---
+        self.generated_frame = tk.Frame(middle_frame, bg="#2b2b2b", bd=2, relief="sunken")
+        self.generated_frame.pack(side="left", anchor="n", padx=(15, 0))
 
-        # bottom row: ai input and responses output box ---
-        ai_frame = tk.Frame(main_frame)
-        ai_frame.grid(row=3, column=0, sticky="ew", pady=(0, 5), padx=(0, 5))
+        tk.Label(
+            self.generated_frame,
+            text="Generated Images",
+            font=("Segoe UI", 11, "bold"),
+            bg="#2b2b2b",
+            fg="#ffffff"
+        ).pack(pady=(5, 5))
 
-        # input field for user prompt to AI
-        self.ai_entry = tk.Entry(
-            ai_frame, 
-            width=60, 
-            font=default_font
-            )
-        self.ai_entry.insert(0, "Type your question for Verita...")
+        # scrollable area for generated images
+        self.image_canvas = tk.Canvas(
+            self.generated_frame,
+            width=512,
+            height=512,
+            bg="#1e1e1e",
+            highlightthickness=0
+        )
+        self.image_canvas.pack(padx=5, pady=5)
 
-        # remove placeholder text when clicking into the box
+        # inner frame for stacking multiple image thumbnails
+        self.images_inner = tk.Frame(self.image_canvas, bg="#1e1e1e")
+        self.image_canvas.create_window((0, 0), window=self.images_inner, anchor="nw")
+
+        # make scroll region adjust automatically
+        def on_configure(event):
+            self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all"))
+        self.images_inner.bind("<Configure>", on_configure)
+
+         # --- Bottom Chat Section (single-row layout) ---
+        chat_frame = tk.Frame(main_frame, bg="#2b2b2b")
+        chat_frame.grid(row=3, column=0, sticky="ew", pady=(5, 5), padx=(5, 5))
+        main_frame.columnconfigure(0, weight=1)
+
+        # Configure grid columns so entry expands but buttons stay fixed
+        chat_frame.columnconfigure(0, weight=1)  # entry expands
+        chat_frame.columnconfigure(1, weight=0)
+        chat_frame.columnconfigure(2, weight=0)
+
+        # Entry box — width roughly aligned with output box
+        self.ai_entry = tk.Entry(chat_frame, font=("Segoe UI", 10))
+        self.ai_entry.insert(0, "Chat...")
+        self.ai_entry.grid(row=0, column=0, sticky="ew", padx=(0, 5), pady=(0, 3))
+
+        # Remove placeholder and bind Enter
         self.ai_entry.bind("<FocusIn>", self.clear_placeholder)
-
-        # pressing Enter should submit text
         self.ai_entry.bind("<Return>", self.submit_ai_text)
-
-        # detect typing so we can shift focus logic if needed
         self.ai_entry.bind("<KeyRelease>", self.focus_send_button)
 
-        # location in the frame
-        self.ai_entry.pack(side="left", fill="x", expand=True, padx=(0, 5))
-
-        # send button
-        self.ai_send_button = tk.Button(
-            ai_frame,
-            text="Send",
-            command=lambda: self.display_ai_response(self.ai_entry.get())
-        )
-        self.ai_send_button.pack(side="right")
-        
-        # speech-to-text button (microphone)
+        # Speak button — near middle-right side
         mic_button = tk.Button(
-            ai_frame,
+            chat_frame,
             text="🎙 Speak",
+            width=8,
             command=self.speech_to_text
         )
-        mic_button.pack(side="right", padx=(5, 5))
+        mic_button.grid(row=0, column=2, sticky="e", padx=(5, 0))
+
+        # Send button — next to Speak
+        self.ai_send_button = tk.Button(
+            chat_frame,
+            text="Send",
+            width=8,
+            command=lambda: self.display_ai_response(self.ai_entry.get())
+        )
+        self.ai_send_button.grid(row=0, column=1, sticky="e", padx=(5, 0))
 
         # ai output frame
         ai_output_frame = tk.Frame(main_frame)
@@ -311,7 +350,7 @@ class App:
         self.response_time_label.pack(fill="x", padx=5, pady=(0, 5), anchor="w")
 
         # insert placeholder text at start
-        self.ai_output_box.insert(tk.END, "Your learning journey with Verita begins here...\n")
+        self.ai_output_box.insert(tk.END, "Chat output...\n")
         self.ai_output_box.config(state="disabled")
 
         # link scrollbar back to AI output box
@@ -322,14 +361,15 @@ class App:
         ai_output_container.columnconfigure(0, weight=1)
 
         # initial render from service
-        self.render_summary()
+        # self.render_summary()
 
         self.img_settings = {
             "steps": 22,
             "guidance": 7.5,
             "width": 512,
             "height": 512,
-            "model": "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"
+            "model": "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
+            "style": "sexy"
         }
 
     # ------------------- HELPERS -------------------
@@ -520,7 +560,7 @@ class App:
         """
         Remove placeholder text when user clicks into the entry box.
         """
-        if self.ai_entry.get().strip() == "Type your question for Verita...":
+        if self.ai_entry.get().strip() == "Chat...":
             self.ai_entry.delete(0, tk.END)
             self.ai_entry.unbind("<FocusIn>")
 
@@ -530,7 +570,7 @@ class App:
         keep focus in the entry box until Enter is pressed.
         """
         current_text = self.ai_entry.get().strip()
-        if current_text and current_text != "Type your question for Verita...":
+        if current_text and current_text != "Chat...":
             # keep focus in the entry so user can continue typing
             self.ai_entry.focus_set()
 
@@ -540,14 +580,14 @@ class App:
         Handles AI input: shows 'processing...', then replaces it with the LLM's reply.
         """
         user_input = user_input.strip()
-        if not user_input or user_input == "Type your question for Verita...":
+        if not user_input or user_input == "Chat...":
             return
 
         # display the user's input in the chat box
         self.ai_output_box.config(state="normal")
         # clear the placeholder text the first time the user sends a message
         current_text = self.ai_output_box.get("1.0", tk.END).strip()
-        if current_text.startswith("Your learning journey with Verita begins here"):
+        if current_text.startswith("Chat"):
             self.ai_output_box.delete("1.0", tk.END)
         self.ai_output_box.insert(tk.END, f"You: {user_input}\n")
 
@@ -571,7 +611,7 @@ class App:
 
             # update chat output
             self.ai_output_box.config(state="normal")
-            self.ai_output_box.insert(insert_start, f"Verita: {reply_text}\n\n")
+            self.ai_output_box.insert(insert_start, f"Response: {reply_text}\n\n")
             if any(w in user_input.lower() for w in ["diagram", "image", "visualize", "show me", "picture"]):
                 self.ai_output_box.insert(tk.END, "Tip: Click “🖼 Generate Image” to create a diagram.\n\n")
             else:
@@ -696,7 +736,7 @@ class App:
         # sentiment for all entries
         self.service.set_entry(entry_type, text)
 
-        self.render_summary()
+        # self.render_summary()
 
     def clear_entries(self) -> None:
         """
@@ -1063,8 +1103,8 @@ class App:
         self.center_popup(win, 320, 240)
 
         # fields: steps, guidance, width, height, model
-        labels = ["Steps", "Guidance", "Width", "Height", "Model"]
-        keys   = ["steps", "guidance", "width", "height", "model"]
+        labels = ["Steps", "Guidance", "Width", "Height", "Model", "Style"]
+        keys   = ["steps", "guidance", "width", "height", "model", "style"]
         entries = {}
 
         for i, (lbl, key) in enumerate(zip(labels, keys)):
@@ -1081,6 +1121,7 @@ class App:
                 self.img_settings["width"]    = int(entries["width"].get())
                 self.img_settings["height"]   = int(entries["height"].get())
                 self.img_settings["model"]    = entries["model"].get().strip()
+                self.img_settings["style"]    = entries["styel"].get().strip()
                 win.destroy()
                 self.custom_message_popup("Saved", "Image settings updated.")
             except Exception as e:
@@ -1108,15 +1149,23 @@ class App:
                     width=self.img_settings["width"],
                     height=self.img_settings["height"],
                     model_name=self.img_settings["model"],
+                    style=self.img_settings["style"],
                     progress_callback=on_progress,
                     init_image=init_img
                 )
                 # show the image in the left panel if present
                 try:
                     from PIL import Image, ImageTk
-                    img = Image.open(path).resize((512, 512))
-                    self.image = ImageTk.PhotoImage(img)
-                    self.image_label.config(image=self.image)
+                    img = Image.open(path)
+
+                    # Fit to frame dynamically (up to 512x512)
+                    max_w, max_h = 512, 512
+                    img.thumbnail((max_w, max_h), Image.LANCZOS)
+
+                    filled = ImageTk.PhotoImage(img)
+                    display_label = tk.Label(self.images_inner, image=filled, bg="#1e1e1e")
+                    display_label.image = filled  # prevent garbage collection
+                    display_label.pack(padx=10, pady=10)
                 except Exception as e:
                     self.custom_message_popup("Image", f"Generated: {path}\n(Preview failed: {e})")
             except Exception as e:

@@ -9,6 +9,28 @@ from typing import Optional, Dict          # if not present
 from copy import deepcopy                  # snapshot()
 import torch, gc                           # GPU suspend/resume
 from vision.image_gen import generate_image # concept image
+import os
+
+def resolve_model_path(model_filename: str) -> str:
+    """
+    Safely resolve the path to a model file.
+    Searches common model directories and verifies existence.
+    """
+    import os
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))  # project root
+    models_dir = os.path.join(base_dir, "models")
+    candidate = os.path.join(models_dir, model_filename)
+
+    print(f"[DEBUG] Looking for model at: {candidate}")
+    if os.path.exists(candidate):
+        print(f"[INFO] Found model at: {candidate}")
+        return candidate
+
+    raise FileNotFoundError(
+        f"Model file not found. Checked: {candidate}\n"
+        f"Base dir: {base_dir}\n"
+        f"Current working dir: {os.getcwd()}"
+    )
 
 class LlmService:
     """
@@ -17,13 +39,18 @@ class LlmService:
     """
     from audio.tts_service import TTSService
 
-    def __init__(self, state: Optional[LlmState] = None, model_path="./models/DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored-Q5_K_M.gguf"):
+    def __init__(self, state: Optional[LlmState] = None, model_path: str = None):
         """
         Constructor initializes service with an existing state,
         or creates a new empty LearnflowState if none provided.
         """
+        from llm.llm_service import resolve_model_path
+
+        if model_path is None:
+            model_path = resolve_model_path("DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf")
+
         self._state = state or LlmState()
-        self.responses = LlamaEngine(model_path=model_path) # full ai replies
+        self.responses = LlamaEngine(model_path=model_path)  # full ai replies
         prompt_text = self.get_prompt() # pull the prompt text
         if prompt_text:
             self.responses.system_prompt = prompt_text
@@ -317,8 +344,9 @@ class LlmService:
         width: int = 512,
         height: int = 512,
         model_name: str = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
+        style=None,
         progress_callback=None,
-        init_image: str | None = None
+        init_image: str | None = None,
     ) -> str:
         text = (user_text or "").strip()
         if not text or text.lower() in {"continue", "go on", "more", "next"}:
@@ -329,18 +357,20 @@ class LlmService:
                         text = cand
                         break
         if not text:
-            text = "A helpful academic concept"
+            text = "A sexy advisor"
+            
+        if not style:
+            style = "sexy"
 
         positive = (
-            "educational infographic illustrating the following conversation context, "
-            "clean vector art, minimal text, clear labeled boxes and arrows, "
-            "white background, professional flat design, "
-            "topic and explanation combined: "
+            "anime style, full body illustration, "
+            "high-contrast image, vibrant colors, "
+            "clear details, topic and explanation combined: "
             f"{text}"
         )
         negative = (
             "gibberish text, misspelled words, watermark, logo, noisy background, "
-            "artifacts, photo, 3D render, low contrast, clutter, nsfw"
+            "artifacts, photo, 3D render, low contrast, clutter, zoom out"
         )
 
         # optionally free VRAM before SD
@@ -355,7 +385,8 @@ class LlmService:
                 progress_callback=progress_callback,
                 negative_prompt=negative,
                 seed=42,
-                init_image=init_image
+                init_image=init_image,
+                style=style
             )
         finally:
             self.resume_llm()
@@ -370,8 +401,14 @@ class LlamaEngine:
     """
     _executor = ThreadPoolExecutor(max_workers=2)
 
-    def __init__(self, model_path="llm/DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored-Q5_K_M.gguf", n_gpu_layers=100):
+    def __init__(self, model_path=None, n_gpu_layers=100):
+        if not model_path:
+            model_path = resolve_model_path("DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored-Q5_K_M.gguf")
+
         self.model_path = model_path
+        if not os.path.exists(model_path):
+            raise ValueError(f"Model path does not exist: {model_path}")
+        
         self.llm = Llama(
             model_path=model_path,
             n_ctx=8192,

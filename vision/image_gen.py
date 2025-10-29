@@ -65,7 +65,8 @@ def generate_image(
     progress_callback=None,
     negative_prompt=None,
     seed=42,
-    init_image=None
+    init_image=None,
+    style=None
 ):
     """
     Use stable-diffusion.cpp to generate an image locally, streaming progress.

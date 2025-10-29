@@ -20,7 +20,7 @@ from app_core.app_manager import AppManager
 def main():
     root = tk.Tk()
     root.title("SifVision Studio")
-    root.geometry("1250x840")
+    root.geometry("1172x820")
 
     app = AppManager(root)
     root.mainloop()
