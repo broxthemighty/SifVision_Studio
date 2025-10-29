@@ -30,6 +30,12 @@ from tkinter import filedialog, ttk         # standard Tkinter dialogs
 from memory.domain_models import EntryType           # domain layer EntryType
 from llm.llm_service import LlmService
 import threading
+import os
+
+from PIL import Image, ImageTk
+from vision.image_gen import list_available_models
+from app_core.config_manager import ConfigManager
+from pathlib import Path
 
 
 class AutoScrollbar(tk.Scrollbar):
@@ -96,186 +102,159 @@ class App:
 
         # --- Main container frame ---
         main_frame = tk.Frame(root, padx=10, pady=10)
-        main_frame.grid(row=0, column=0, sticky="nw")
+        main_frame.grid(row=0, column=0, sticky="nsew")
         #main_frame.columnconfigure(0, weight=1)
+
+        # --- Dynamic scaling ---
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+        main_frame.rowconfigure(0, weight=0)  # top/menu
+        main_frame.rowconfigure(1, weight=1)  # middle_frame
+        main_frame.rowconfigure(2, weight=0)  # optional padding
+        main_frame.rowconfigure(3, weight=0)  # chat input
+        main_frame.rowconfigure(4, weight=0)  # response label
 
         # --- Top row: welcome label, clear button, drop-down menu ---
         top_frame = tk.Frame(main_frame)
         top_frame.grid(row=0, column=0, sticky="ew")
         top_frame.columnconfigure(0, weight=1)
 
-        # main title label
-        """self.display_label = tk.Label(
-            top_frame,
-            text="Welcome to Learnflow\nMy name is Verita",
-            font=("Georgia", 14),
-            pady=2,
-            justify="left",
-        )
-        self.display_label.grid(row=0, column=0, sticky="w")"""
-
-        # frame to hold summary text and scrollbar (so scrollbar can hide itself if not needed)
-        """summary_container = tk.Frame(top_frame)
-        summary_container.grid(row=0, column=2, padx=(5, 5), sticky="n")
-
-        # auto-hiding vertical scrollbar for the summary box
-        summary_scroll = AutoScrollbar(summary_container, orient="vertical")
-        summary_scroll.grid(row=0, column=1, sticky="ns")
-
-        # summary text box
-        self.summary_box = tk.Text(
-            summary_container,
-            height=4,
-            width=40,
-            wrap="word",
-            state="disabled",
-            font=default_font,
-            yscrollcommand=summary_scroll.set
-        )
-        self.summary_box.grid(row=0, column=0, sticky="nsew")
-
-        # link scrollbar back to summary box
-        summary_scroll.config(command=self.summary_box.yview)
-
-        # allow the text box to expand properly inside the container
-        summary_container.rowconfigure(0, weight=1)
-        summary_container.columnconfigure(0, weight=1)
-
-        # clear button
-        self.clear_button = tk.Button(
-            top_frame, text="Clear", width=7, command=self.clear_entries
-        )
-        self.clear_button.grid(row=0, column=1, sticky="w", padx=(5, 2))"""
-
         # attach a menubar
         self.build_menu()
 
-        # --- Middle row: buttons for Goal/Skill/Session/Notes ---
+        # --- Middle Row: Avatar, Buttons (Left) + Chat Output (Right) ---
         middle_frame = tk.Frame(main_frame)
         middle_frame.grid(row=1, column=0, sticky="nsew", pady=5)
 
-        # image on the left
-        try:
-            self.image = tk.PhotoImage(file="images\\image2_50pc.png")
-            self.image_label = tk.Label(middle_frame, image=self.image, width=512, height=512)
-            self.image_label.pack(side="left", padx=(0, 10))
-        except Exception:
-            # fail gracefully if image not found
-            pass
-        
-        # image on the left (animated) future integration, maybe use textblob for emotions on specific images
-        """try:
-            import itertools
-            from PIL import Image, ImageTk
-            self.image_frames = [ImageTk.PhotoImage(Image.open(f"images/frame_{i}.png").resize((512, 512))) for i in range(1, 5)]
-            self.image_label = tk.Label(middle_frame, image=self.image_frames[0])
-            self.image_label.pack(side="left", padx=(0, 10))
+        # Left and right sections both expand properly
+        middle_frame.columnconfigure(0, weight=1)   # left panel (avatar)
+        middle_frame.columnconfigure(1, weight=3)   # right panel (chat)
+        middle_frame.rowconfigure(0, weight=1)
 
-            def animate(counter=itertools.cycle(range(len(self.image_frames)))):
-                self.image_label.configure(image=self.image_frames[next(counter)])
-                self.root.after(200, lambda: animate(counter))
-            animate()
-        except Exception as e:
-            print(f"Animation load failed: {e}")"""
+        # ----- LEFT SIDE -----
+        left_frame = tk.Frame(middle_frame)
+        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 15))
+        middle_frame.rowconfigure(0, weight=1)
+        middle_frame.columnconfigure(0, weight=1)
 
-        # right frame with stacked buttons and log box
-        right_frame = tk.Frame(middle_frame)
-        right_frame.pack(side="left", anchor="n")
+        self.config = ConfigManager().load()
 
-        # button frame
-        buttons_frame = tk.Frame(right_frame)
-        buttons_frame.pack(side="left", anchor="n", padx=(0, 5))
+        # Avatar
+        avatar_path = self.config["app"]["avatar_image"]
+        self.image_label = tk.Label(left_frame)
+        self.image_label.pack(side="top", pady=(10, 10))
+        if os.path.exists(avatar_path):
+            self.avatar_photo = ImageTk.PhotoImage(Image.open(avatar_path))
+            self.image_label.config(image=self.avatar_photo)
 
-        # create one button per EntryType
-        """for et in (EntryType.Goal, EntryType.Skill, EntryType.Session, EntryType.Notes):
-            tk.Button(
-                buttons_frame,
-                text=et.value,
-                width=10,
-                command=lambda t=et: self.on_add_or_edit_entry(t),
-            ).pack(pady=2, anchor="w")"""
+        # --- Bottom control panel under avatar ---
+        controls_frame = tk.Frame(left_frame)
+        controls_frame.pack(side="bottom", fill="x", pady=(8, 5))
 
-        # tts audio checkbox
+        # Row 1 — audio + dropdown + buttons
+        controls_frame.columnconfigure(0, weight=0)  # audio
+        controls_frame.columnconfigure(1, weight=1)  # dropdown
+        controls_frame.columnconfigure(2, weight=0)
+        controls_frame.columnconfigure(3, weight=0)
+        controls_frame.columnconfigure(4, weight=0)
+        controls_frame.columnconfigure(5, weight=0)
+
+        # Audio checkbox (bottom-left)
         self.audio_var = tk.BooleanVar(value=False)
         audio_chk = tk.Checkbutton(
-            buttons_frame,
+            controls_frame,
             text="Audio",
             variable=self.audio_var,
             command=lambda: self.service.tts.set_enabled(self.audio_var.get())
         )
-        audio_chk.pack(pady=(20, 5), anchor="w")
-
-        # image settings button
-        img_settings_btn = tk.Button(
-            buttons_frame,
-            text="⚙ Image\n Settings",
-            command=self.open_image_settings
-        )
-        img_settings_btn.pack(pady=(20, 5), anchor="w")
-
-        # guidance checkbox (use current avatar as init image, if you wire it later)
-        self.use_guidance_var = tk.BooleanVar(value=False)
-        guidance_chk = tk.Checkbutton(
-            buttons_frame,
-            text="Current\n Image for\nGuidance",
-            variable=self.use_guidance_var,
-            anchor="w"
-        )
-        guidance_chk.pack(pady=(5, 10), anchor="w")
-
-        # generate image
-        gen_img_btn = tk.Button(
-            buttons_frame,
-            text="🖼 Generate\n Image",
-            command=lambda: self.generate_image_from_prompt()
-        )
-        gen_img_btn.pack(pady=(20, 5), anchor="w")
-
-        # progress bar
-        self.progress = ttk.Progressbar(buttons_frame, orient="horizontal", length=70, mode="determinate")
-        self.progress.pack(pady=(10, 5), anchor="w")
-        self.progress["value"] = 0
+        audio_chk.grid(row=0, column=0, sticky="w", padx=(5, 10))
         
+        repo_root = Path(__file__).resolve().parents[1]
+        model_dir = repo_root / "models" / self.config["image_model"]["folder"]
+        model_dir = Path(model_dir)
+        models = list_available_models(str(model_dir))
+
+        # Build mapping: name → full path
+        self.model_path_map = {os.path.basename(m): str(Path(model_dir) / m) for m in models}
+        model_names = list(self.model_path_map.keys())
+
+        self.image_model_var = tk.StringVar(value=self.config["image_model"]["last_used"] or (model_names[0] if model_names else ""))
+        self.model_dropdown = ttk.Combobox(
+            controls_frame,
+            textvariable=self.image_model_var,
+            values=model_names,
+            state="readonly",
+            width=28
+        )
+        self.model_dropdown.grid(row=0, column=1, sticky="ew", padx=(2, 2))
+
+        # Settings ⚙ button
         tk.Button(
-            buttons_frame,
-            text="Clear\nImages",
-            bg="#444444",
-            fg="#ffffff",
-            activebackground="#666666",
-            activeforeground="#ffffff",
-            command=lambda: [child.destroy() for child in self.images_inner.winfo_children()]
-        ).pack(pady=(0, 5))
-        
-         # --- Rightmost frame for generated images ---
-        self.generated_frame = tk.Frame(middle_frame, bg="#2b2b2b", bd=2, relief="sunken")
-        self.generated_frame.pack(side="left", anchor="n", padx=(15, 0))
+            controls_frame,
+            text="⚙",
+            width=4,
+            command=self.open_image_settings
+        ).grid(row=0, column=2, sticky="ew", padx=(2, 2))
 
-        tk.Label(
-            self.generated_frame,
-            text="Generated Images",
-            font=("Segoe UI", 11, "bold"),
-            bg="#2b2b2b",
-            fg="#ffffff"
-        ).pack(pady=(5, 5))
+        # Current image guidance checkbox
+        self.use_guidance_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            controls_frame,
+            text="Use Current Image",
+            variable=self.use_guidance_var
+        ).grid(row=0, column=3, sticky="w", padx=(4, 8))
 
-        # scrollable area for generated images
-        self.image_canvas = tk.Canvas(
-            self.generated_frame,
-            width=512,
-            height=512,
-            bg="#1e1e1e",
-            highlightthickness=0
+        # Clear Images button
+        tk.Button(
+            controls_frame,
+            text="🗑 Clear",
+            width=7,
+            command=self.clear_embedded_images
+        ).grid(row=0, column=4, sticky="ew", padx=(4, 4))
+
+        # Generate Image button
+        tk.Button(
+            controls_frame,
+            text="🖼 Generate",
+            width=9,
+            command=lambda: self.generate_image_from_prompt(self.image_model_var)
+        ).grid(row=0, column=5, sticky="ew", padx=(4, 6))
+
+        # Row 2 — Progress bar
+        self.progress = ttk.Progressbar(
+            controls_frame,
+            orient="horizontal",
+            mode="determinate"
         )
-        self.image_canvas.pack(padx=5, pady=5)
+        self.progress.grid(row=1, column=0, columnspan=6, sticky="ew", pady=(6, 3), padx=(5, 5))
+        self.progress["value"] = 0
 
-        # inner frame for stacking multiple image thumbnails
-        self.images_inner = tk.Frame(self.image_canvas, bg="#1e1e1e")
-        self.image_canvas.create_window((0, 0), window=self.images_inner, anchor="nw")
+        # ----- RIGHT SIDE -----
+        right_frame = tk.Frame(middle_frame)
+        right_frame.grid(row=0, column=1, sticky="nsew")
+        right_frame.columnconfigure(0, weight=1)
+        right_frame.rowconfigure(0, weight=1)
 
-        # make scroll region adjust automatically
-        def on_configure(event):
-            self.image_canvas.configure(scrollregion=self.image_canvas.bbox("all"))
-        self.images_inner.bind("<Configure>", on_configure)
+        # Scrollable AI chat output area
+        self.ai_scroll = tk.Scrollbar(right_frame, orient="vertical")
+        self.ai_scroll.grid(row=0, column=1, sticky="ns")
+
+        self.ai_output_box = tk.Text(
+            right_frame,
+            width=75,
+            height=20,
+            wrap="word",
+            font=("Segoe UI", 10),
+            yscrollcommand=self.ai_scroll.set,
+            state="normal",
+            bg="#1e1e1e",
+            fg="#dcdcdc"
+        )
+        self.ai_output_box.grid(row=0, column=0, sticky="nsew")
+        self.ai_scroll.config(command=self.ai_output_box.yview)
+        self.ai_output_box.insert(tk.END, "Chat output...\n")
+        self.ai_output_box.config(state="disabled")
 
          # --- Bottom Chat Section (single-row layout) ---
         chat_frame = tk.Frame(main_frame, bg="#2b2b2b")
@@ -318,47 +297,19 @@ class App:
         # ai output frame
         ai_output_frame = tk.Frame(main_frame)
         ai_output_frame.grid(row=4, column=0, sticky="w", pady=(2, 0))
-
-        # container frame for AI output text and scrollbar
-        ai_output_container = tk.Frame(ai_output_frame)
-        ai_output_container.pack(fill="both", expand=True)
-
-        # always-visible vertical scrollbar
-        ai_scroll = tk.Scrollbar(ai_output_container, orient="vertical")
-        ai_scroll.pack(side="right", fill="y")
-
-        # AI output text box with scrollbar attached
-        self.ai_output_box = tk.Text(
-            ai_output_container,
-            width=83,
-            height=10,
-            wrap="word",
-            state="normal",
-            font=default_font,
-            yscrollcommand=ai_scroll.set
-        )
-        self.ai_output_box.pack(side="left", fill="both", expand=True)
-        ai_scroll.config(command=self.ai_output_box.yview)
         
         # timer label under AI output box
-        self.response_time_label = tk.Label(
-            ai_output_frame,
-            text="Response time: —",
-            anchor="e",  # right align
-            font=("Segoe UI", 9, "italic")
-        )
-        self.response_time_label.pack(fill="x", padx=5, pady=(0, 5), anchor="w")
+        # Bottom bar for response time and info
+        bottom_bar = tk.Frame(main_frame)
+        bottom_bar.grid(row=4, column=0, sticky="ew", padx=5, pady=(3, 3))
+        bottom_bar.columnconfigure(1, weight=1)
+
+        self.response_label = tk.Label(bottom_bar, text="Response time: —", fg="#aaa", bg="#1e1e1e")
+        self.response_label.pack(side="right", padx=10)
 
         # insert placeholder text at start
         self.ai_output_box.insert(tk.END, "Chat output...\n")
         self.ai_output_box.config(state="disabled")
-
-        # link scrollbar back to AI output box
-        ai_scroll.config(command=self.ai_output_box.yview)
-
-        # allow expansion inside container
-        ai_output_container.rowconfigure(0, weight=1)
-        ai_output_container.columnconfigure(0, weight=1)
 
         # initial render from service
         # self.render_summary()
@@ -372,7 +323,63 @@ class App:
             "style": "sexy"
         }
 
+        # Allow full window resizing
+        self.root.minsize(900, 600)  # or smaller if desired
+        self.root.geometry("")  # auto-size on startup
+        self.root.resizable(True, True)
+
     # ------------------- HELPERS -------------------
+
+    def get_available_models(self):
+        model_dir = self.config["image_model"]["folder"]
+        model_list = []
+        for item in os.listdir(model_dir):
+            full = os.path.join(model_dir, item)
+            if os.path.isdir(full) or item.endswith((".gguf", ".safetensors", ".ckpt")):
+                model_list.append(item)
+        return sorted(model_list)
+
+    def insert_chat_image(self, image_path: str):
+        """
+        Insert a generated image directly into the chat output box,
+        scaled to 1/3 of its width (~250–300px).
+        """
+        from PIL import Image, ImageTk
+
+        try:
+            img = Image.open(image_path)
+            chat_width = int(self.ai_output_box.winfo_width() or 900)
+            target_width = chat_width // 3
+            ratio = target_width / img.width
+            target_height = int(img.height * ratio)
+            img = img.resize((target_width, target_height), Image.LANCZOS)
+
+            tk_img = ImageTk.PhotoImage(img)
+            self.ai_output_box.image_create(tk.END, image=tk_img)
+            self.ai_output_box.insert(tk.END, "\n")
+            # Keep reference so Tk doesn’t garbage collect it
+            if not hasattr(self, "_chat_images"):
+                self._chat_images = []
+            self._chat_images.append(tk_img)
+            self.ai_output_box.see(tk.END)
+        except Exception as e:
+            self.custom_message_popup("Image Error", f"Could not insert image: {e}", msg_type="error")
+            
+    def clear_embedded_images(self):
+        """
+        Remove generated images displayed in the interface.
+        """
+        try:
+            if hasattr(self, "generated_image_labels"):
+                for lbl in self.generated_image_labels:
+                    lbl.destroy()
+                self.generated_image_labels.clear()
+                print("[INFO] Cleared embedded images.")
+            else:
+                print("[INFO] No embedded images found to clear.")
+        except Exception as e:
+            print(f"[WARN] Failed to clear images: {e}")
+            
     def show_async_error(self, title: str, exception: Exception):
         """
         Safely display an exception message from a background thread.
@@ -607,17 +614,34 @@ class App:
             elapsed = end_time - start_time
 
             # save user/AI exchange to log file
+            # sanitize and display assistant response
+            reply_text = reply_text.lstrip().replace("Assistant:", "").replace("Response:", "").strip()
             self.service.save_session_log(user_input, reply_text)
 
             # update chat output
             self.ai_output_box.config(state="normal")
-            self.ai_output_box.insert(insert_start, f"Response: {reply_text}\n\n")
+
+            # Clean up duplicate prefixes from LLM output
+            reply_text = (
+                reply_text
+                .replace("Assistant:", "")
+                .replace("Response:", "")
+                .replace("User:", "")
+                .replace("System Prompt:", "")
+                .replace("Current Model:", "")
+                .replace(self.service.get_prompt() or "", "")
+                .replace(self.service.get_current_model() or "", "")
+                .strip()
+            )
+
+            # Insert assistant name label
+            self.ai_output_box.insert(insert_start, f"Verita: {reply_text}\n\n")
+
             if any(w in user_input.lower() for w in ["diagram", "image", "visualize", "show me", "picture"]):
                 self.ai_output_box.insert(tk.END, "Tip: Click “🖼 Generate Image” to create a diagram.\n\n")
-            else:
-                self.ai_output_box.insert(tk.END, "\n")
-            self.ai_output_box.see(tk.END)
+
             self.ai_output_box.config(state="disabled")
+            self.ai_output_box.see(tk.END)
 
             # determine color based on elapsed time
             if elapsed < 2:
@@ -1121,7 +1145,7 @@ class App:
                 self.img_settings["width"]    = int(entries["width"].get())
                 self.img_settings["height"]   = int(entries["height"].get())
                 self.img_settings["model"]    = entries["model"].get().strip()
-                self.img_settings["style"]    = entries["styel"].get().strip()
+                self.img_settings["style"]    = entries["style"].get().strip()
                 win.destroy()
                 self.custom_message_popup("Saved", "Image settings updated.")
             except Exception as e:
@@ -1129,7 +1153,7 @@ class App:
 
         tk.Button(win, text="Save", command=save).grid(row=len(labels), column=0, columnspan=2, pady=10)
             
-    def generate_image_from_prompt(self):
+    def generate_image_from_prompt(self, model_name):
         prompt_text = self.ai_entry.get().strip()
         init_img = None
         # if you want to pass current avatar when the checkbox is on:
@@ -1142,32 +1166,30 @@ class App:
             try:
                 def on_progress(p):
                     self.root.after(0, lambda: self.progress.configure(value=p))
+                selected_name = self.image_model_var.get()
+                model_path = self.model_path_map[selected_name]
                 path = self.service.generate_concept_image(
                     user_text=prompt_text,
                     steps=self.img_settings["steps"],
                     guidance=self.img_settings["guidance"],
                     width=self.img_settings["width"],
                     height=self.img_settings["height"],
-                    model_name=self.img_settings["model"],
+                    model_name=model_path,
                     style=self.img_settings["style"],
                     progress_callback=on_progress,
                     init_image=init_img
                 )
-                # show the image in the left panel if present
-                try:
-                    from PIL import Image, ImageTk
-                    img = Image.open(path)
+                # --- Embed generated image into chat output ---
+                self.root.after(0, lambda: self.insert_chat_image(path))
 
-                    # Fit to frame dynamically (up to 512x512)
-                    max_w, max_h = 512, 512
-                    img.thumbnail((max_w, max_h), Image.LANCZOS)
+                # Optionally, log that an image was added
+                self.root.after(0, lambda: [
+                    self.ai_output_box.config(state="normal"),
+                    self.ai_output_box.insert(tk.END, f"[Image generated: {os.path.basename(path)}]\n\n"),
+                    self.ai_output_box.config(state="disabled"),
+                    self.ai_output_box.see(tk.END)
+                ])
 
-                    filled = ImageTk.PhotoImage(img)
-                    display_label = tk.Label(self.images_inner, image=filled, bg="#1e1e1e")
-                    display_label.image = filled  # prevent garbage collection
-                    display_label.pack(padx=10, pady=10)
-                except Exception as e:
-                    self.custom_message_popup("Image", f"Generated: {path}\n(Preview failed: {e})")
             except Exception as e:
                 self.show_async_error("Image Generation Failed", e)
             finally:

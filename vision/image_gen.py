@@ -7,6 +7,13 @@ from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime
 import torch
 from pathlib import Path
+from diffusers import (
+    StableDiffusionPipeline,
+    StableDiffusionImg2ImgPipeline,
+    StableDiffusionXLPipeline,
+    StableDiffusionXLImg2ImgPipeline
+)
+from app_core.config_manager import ConfigManager
 
 # current file's directory
 base_dir = Path(__file__).parent
@@ -15,7 +22,9 @@ base_dir = Path(__file__).parent
 parent_dir = base_dir.parent
 
 # path to compiled stable-diffusion.cpp folder
-SD_CPP_PATH = parent_dir / "models\\stable-diffusion.cpp\\build_cli\\bin\\Release"
+cfg = ConfigManager().load()
+base_dir = Path(cfg["image_model"]["folder"])
+SD_CPP_PATH = base_dir / "stable-diffusion.cpp" / "build_cli" / "bin" / "Release"
 SD_EXE = os.path.join(SD_CPP_PATH, "sd.exe")
 
 def _resolve_model_path(model_name: str) -> str:
@@ -54,6 +63,18 @@ def _resolve_model_path(model_name: str) -> str:
         f"Provide a valid .gguf/.bin file."
     )
 
+def list_available_models(base_dir=None):
+    """Return all model folders/files inside the configured directory."""
+    cfg = ConfigManager().load()
+    base_dir = base_dir or cfg["image_model"]["folder"]
+    model_list = []
+    for item in os.listdir(base_dir):
+        full = os.path.join(base_dir, item)
+        if os.path.isdir(full) or item.endswith((".gguf", ".safetensors", ".ckpt")):
+            model_list.append(full)
+    model_list.sort()
+    return model_list
+
 def generate_image(
     prompt,
     output_dir="generated_images",
@@ -66,6 +87,7 @@ def generate_image(
     negative_prompt=None,
     seed=42,
     init_image=None,
+    strength=0.55,
     style=None
 ):
     """
@@ -100,8 +122,12 @@ def generate_image(
     ]
 
     if init_image and os.path.exists(init_image):
-        cmd += ["--init-img", init_image, "--strength", "0.6"]
-
+        # cmd += ["--init-img", init_image, "--strength", "0.6"]
+        pipe = StableDiffusionImg2ImgPipeline.from_single_file(model_path, torch_dtype=torch.float16).to("cuda")
+        result = pipe(prompt=prompt, image=Image.open(init_image), strength=strength, guidance_scale=guidance)
+    else:
+        pipe = StableDiffusionPipeline.from_single_file(model_path, torch_dtype=torch.float16).to("cuda")
+        result = pipe(prompt=prompt, num_inference_steps=steps, guidance_scale=guidance)
     if negative_prompt:
         cmd += ["--negative-prompt", negative_prompt]
 
@@ -147,6 +173,90 @@ def generate_image(
         if progress_callback:
             progress_callback(0)
         return fail_path
+
+def generate_image_diffusers(
+    prompt,
+    output_dir="generated_images",
+    steps=20,
+    guidance=7.5,
+    size=(512, 512),
+    model_name="UncannyValley_VPred.safetensors",
+    device="cuda",
+    negative_prompt=None,
+    seed=42,
+    init_image=None,
+    strength=0.55,
+    style=None,
+    progress_callback=None
+):
+    """Generate an image using Diffusers-based models (.safetensors or folders)."""
+
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, f"generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
+    torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    generator = torch.Generator(device).manual_seed(seed)
+
+    # --- Determine which pipeline to use ---
+    model_name_lower = model_name.lower()
+
+    # SDXL folder or model name detection
+    if os.path.isdir(model_name) or "xl" in model_name_lower:
+        if init_image and os.path.exists(init_image):
+            print(f"[INFO] Loading SDXL Img2Img pipeline from {model_name}")
+            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(model_name, torch_dtype=torch_dtype).to(device)
+            image = Image.open(init_image).convert("RGB").resize(size)
+            result = pipe(
+                prompt=prompt,
+                image=image,
+                strength=strength,
+                guidance_scale=guidance,
+                negative_prompt=negative_prompt,
+                num_inference_steps=steps,
+                generator=generator
+            )
+        else:
+            print(f"[INFO] Loading SDXL pipeline from {model_name}")
+            pipe = StableDiffusionXLPipeline.from_pretrained(model_name, torch_dtype=torch_dtype).to(device)
+            result = pipe(
+                prompt=prompt,
+                guidance_scale=guidance,
+                num_inference_steps=steps,
+                negative_prompt=negative_prompt,
+                generator=generator
+            )
+
+    # SD 1.5 / 2.1 single safetensors
+    else:
+        if init_image and os.path.exists(init_image):
+            print(f"[INFO] Loading SD 1.x Img2Img pipeline from {model_name}")
+            pipe = StableDiffusionImg2ImgPipeline.from_single_file(model_name, torch_dtype=torch_dtype).to(device)
+            image = Image.open(init_image).convert("RGB").resize(size)
+            result = pipe(
+                prompt=prompt,
+                image=image,
+                strength=strength,
+                guidance_scale=guidance,
+                negative_prompt=negative_prompt,
+                num_inference_steps=steps,
+                generator=generator
+            )
+        else:
+            print(f"[INFO] Loading SD 1.x pipeline from {model_name}")
+            pipe = StableDiffusionPipeline.from_single_file(model_name, torch_dtype=torch_dtype).to(device)
+            result = pipe(
+                prompt=prompt,
+                guidance_scale=guidance,
+                num_inference_steps=steps,
+                negative_prompt=negative_prompt,
+                generator=generator
+            )
+
+    # --- Save output ---
+    result.images[0].save(out_path)
+    if progress_callback:
+        progress_callback(100)
+    print(f"[INFO] Image saved: {out_path}")
+    return out_path
 
 def annotate_image(image_path, labels=None, output_path=None):
     """

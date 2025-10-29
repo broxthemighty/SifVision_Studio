@@ -7,4 +7,8 @@ chat_history.txt
 requirements.txt
 session_log.json
 config.json
+prompt.txt
+positive_prompt.txt
+negative_prompt.txt
+config/settings.json
 

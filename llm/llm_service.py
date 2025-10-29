@@ -8,28 +8,49 @@ from audio.tts_service import TTSService
 from typing import Optional, Dict          # if not present
 from copy import deepcopy                  # snapshot()
 import torch, gc                           # GPU suspend/resume
-from vision.image_gen import generate_image # concept image
+from vision.image_gen import generate_image, generate_image_diffusers # concept image
 import os
+from app_core.config_manager import ConfigManager
+from pathlib import Path
 
-def resolve_model_path(model_filename: str) -> str:
+def resolve_model_path(model_name: str, model_type: str = "chat") -> str:
     """
-    Safely resolve the path to a model file.
-    Searches common model directories and verifies existence.
+    Resolves an absolute path to a given model file, ensuring no duplicate folder nesting.
+    Example:
+        model_type="image" and settings["image_model"]["folder"]="models/image_model"
+        will yield: <repo_root>/models/image_model/<model_name>
     """
-    import os
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))  # project root
-    models_dir = os.path.join(base_dir, "models")
-    candidate = os.path.join(models_dir, model_filename)
+    cfg = ConfigManager().load()
+    repo_root = Path(__file__).resolve().parents[1]
 
-    print(f"[DEBUG] Looking for model at: {candidate}")
-    if os.path.exists(candidate):
-        print(f"[INFO] Found model at: {candidate}")
-        return candidate
+    folder = Path(cfg[f"{model_type}_model"]["folder"])
+    base_dir = repo_root / folder
 
+    # 1️⃣ If an absolute file path is provided
+    if os.path.isabs(model_name) and os.path.exists(model_name):
+        return model_name
+
+    # 2️⃣ If the model exists in the configured folder
+    candidate = base_dir / model_name
+    if candidate.exists():
+        return str(candidate)
+
+    # 3️⃣ Search recursively in the configured folder
+    if base_dir.exists():
+        for root, _, files in os.walk(base_dir):
+            for f in files:
+                if f.lower() == model_name.lower():
+                    return str(Path(root) / f)
+
+    # 4️⃣ Final fallback — models/image_model or models/chat_model only ONCE
+    fallback = repo_root / "models" / f"{model_type}_model" / model_name
+    if fallback.exists():
+        return str(fallback)
+
+    # 5️⃣ Throw clear diagnostic
+    checked = "\n  ".join(str(x) for x in [candidate, fallback])
     raise FileNotFoundError(
-        f"Model file not found. Checked: {candidate}\n"
-        f"Base dir: {base_dir}\n"
-        f"Current working dir: {os.getcwd()}"
+        f"Model file not found.\nChecked:\n  {checked}\nBase dir: {base_dir}\nCWD: {os.getcwd()}"
     )
 
 class LlmService:
@@ -46,8 +67,21 @@ class LlmService:
         """
         from llm.llm_service import resolve_model_path
 
-        if model_path is None:
-            model_path = resolve_model_path("DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf")
+        cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.json"
+        print(f"[DEBUG] Expected config path: {cfg_path}")
+        cfg = ConfigManager().load()
+        print(f"[DEBUG] Loaded config data: {cfg}")
+
+        cfg = ConfigManager().load()
+        chat_model_name = cfg["chat_model"].get("last_used", "").strip()
+
+        if not chat_model_name:
+            raise ValueError("No chat model configured in settings.json (chat_model.last_used is empty).")
+
+        model_path = resolve_model_path(chat_model_name, "chat")
+
+        if not os.path.isfile(model_path):
+            raise FileNotFoundError(f"Resolved chat model path is not a file: {model_path}")
 
         self._state = state or LlmState()
         self.responses = LlamaEngine(model_path=model_path)  # full ai replies
@@ -343,7 +377,7 @@ class LlmService:
         guidance: float = 7.5,
         width: int = 512,
         height: int = 512,
-        model_name: str = "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
+        model_name: str = "models\\Image_Gen\\stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf",
         style=None,
         progress_callback=None,
         init_image: str | None = None,
@@ -362,32 +396,59 @@ class LlmService:
         if not style:
             style = "sexy"
 
-        positive = (
-            "anime style, full body illustration, "
-            "high-contrast image, vibrant colors, "
-            "clear details, topic and explanation combined: "
-            f"{text}"
-        )
-        negative = (
-            "gibberish text, misspelled words, watermark, logo, noisy background, "
-            "artifacts, photo, 3D render, low contrast, clutter, zoom out"
-        )
+        cfg = ConfigManager().load()
+        positive_path = cfg["prompts"]["positive"]
+        negative_path = cfg["prompts"]["negative"]
+
+        def read_prompt(path):
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            return ""
+
+        positive_extra = read_prompt(positive_path)
+        negative_extra = read_prompt(negative_path)
+
+        positive += ", " + positive_extra
+        negative += ", " + negative_extra
 
         # optionally free VRAM before SD
         self.suspend_llm()
+        strength = 0.45 if init_image else 0.0
         try:
-            path = generate_image(
-                prompt=positive,
-                steps=steps,
-                guidance=guidance,
-                size=(width, height),
-                model_name=model_name,
-                progress_callback=progress_callback,
-                negative_prompt=negative,
-                seed=42,
-                init_image=init_image,
-                style=style
-            )
+            # Resolve model path dynamically
+            try:
+                model_path = resolve_model_path(model_name, model_type="image")
+            except FileNotFoundError as e:
+                raise FileNotFoundError(f"Image model could not be resolved: {e}")
+            if model_name.endswith(".gguf"):
+                # Use C++ CLI generator (fast quantized)
+                path = generate_image(
+                    prompt=positive,
+                    steps=steps,
+                    guidance=guidance,
+                    size=(width, height),
+                    model_name=model_path,
+                    progress_callback=progress_callback,
+                    negative_prompt=negative,
+                    seed=42,
+                    init_image=init_image,
+                    style=style
+                )
+            else:
+                # Use Diffusers pipeline (PyTorch)
+                path = generate_image_diffusers(
+                    prompt=positive,
+                    steps=steps,
+                    guidance=guidance,
+                    size=(width, height),
+                    model_name=model_path,
+                    progress_callback=progress_callback,
+                    negative_prompt=negative,
+                    seed=42,
+                    init_image=init_image,
+                    style=style
+                )
         finally:
             self.resume_llm()
 
@@ -403,7 +464,7 @@ class LlamaEngine:
 
     def __init__(self, model_path=None, n_gpu_layers=100):
         if not model_path:
-            model_path = resolve_model_path("DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored-Q5_K_M.gguf")
+            model_path = resolve_model_path("DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf")
 
         self.model_path = model_path
         if not os.path.exists(model_path):
@@ -471,12 +532,16 @@ class LlamaEngine:
 
     def _build_prompt(self, user_text: str) -> str:
         """
-        Combine context and system prompt for input.
+        Combine limited recent context for concise replies.
         """
         convo = ""
         for msg in self.context[-2:]:
             convo += f"User: {msg['user']}\nAssistant: {msg['ai']}\n"
-        return f"{self.system_prompt}\n\n{convo}User: {user_text}\nAssistant:"
+
+        # Short, role reminder (1 line)
+        role_hint = "Answer directly and concisely."
+
+        return f"{role_hint}\n{convo}User: {user_text}\nAssistant:"
     
     def reply(self, user_text: str) -> str:
         """
@@ -489,6 +554,36 @@ class LlamaEngine:
         self.context.append({"user": user_text, "ai": reply})
         if len(self.context) > 10:       # roughly five full turns
             self.context = self.context[-4:]   # keep the last 2 user/ai pairs only
+        reply = reply.strip()
+
+        # Strip system prompt and model info if leaked
+        for junk in [self.system_prompt, self.model_path, "Current Model:", "Model loaded with GPU acceleration"]:
+            if junk in reply:
+                reply = reply.replace(junk, "")
+
+        # Clean up redundant phrases and self-introductions
+        reply = reply.strip()
+        for junk in [self.system_prompt, self.model_path, "Current Model:", "Model loaded with GPU acceleration"]:
+            reply = reply.replace(junk, "")
+        reply = reply.replace("Assistant:", "").replace("User:", "").strip()
+
+        # Remove introductory fluff (common with instruction-tuned models)
+        intro_markers = [
+            "as verita", "as your learning advisor", "sure!", "of course", "hello", "hi", "let me explain",
+            "i can explain", "here's an explanation", "allow me to", "let's talk about"
+        ]
+        lower = reply.lower()
+        for marker in intro_markers:
+            if lower.startswith(marker):
+                parts = reply.split(".", 1)
+                if len(parts) > 1:
+                    reply = parts[1].strip()
+                    break
+
+        # Limit length if the model still rambles
+        if len(reply.split()) > 120:
+            reply = " ".join(reply.split()[:120]) + "..."
+
         return reply
     
     def reply_async(self, user_text: str, callback):
