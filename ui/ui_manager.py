@@ -71,6 +71,9 @@ class App:
         # hold references to the Tk root and the business service
         self.root = root
         self.service = service
+        
+        self.avatar_min_size = (128, 128)
+        self.avatar_max_size = (512, 512)
 
         # set base background and foreground
         self.root.option_add("*Background", "#2b2b2b")      # dark gray background
@@ -145,8 +148,18 @@ class App:
         self.image_label = tk.Label(left_frame)
         self.image_label.pack(side="top", pady=(10, 10))
         if os.path.exists(avatar_path):
-            self.avatar_photo = ImageTk.PhotoImage(Image.open(avatar_path))
-            self.image_label.config(image=self.avatar_photo)
+            self.original_avatar = Image.open(avatar_path)
+            self._resize_avatar() 
+
+        # Avatar sizing constraints
+        self.avatar_min_size = 256    # minimum dimension
+        self.avatar_max_size = 512    # maximum dimension
+
+        # Track current displayed image separately
+        self.avatar_image = None
+
+        # Bind resize event
+        self.root.bind("<Configure>", self._resize_avatar)
 
         # --- Bottom control panel under avatar ---
         controls_frame = tk.Frame(left_frame)
@@ -304,8 +317,8 @@ class App:
         bottom_bar.grid(row=4, column=0, sticky="ew", padx=5, pady=(3, 3))
         bottom_bar.columnconfigure(1, weight=1)
 
-        self.response_label = tk.Label(bottom_bar, text="Response time: —", fg="#aaa", bg="#1e1e1e")
-        self.response_label.pack(side="right", padx=10)
+        self.response_time_label = tk.Label(bottom_bar, text="Response time: —", fg="#aaa", bg="#1e1e1e")
+        self.response_time_label.pack(side="right", padx=10)
 
         # insert placeholder text at start
         self.ai_output_box.insert(tk.END, "Chat output...\n")
@@ -338,6 +351,32 @@ class App:
             if os.path.isdir(full) or item.endswith((".gguf", ".safetensors", ".ckpt")):
                 model_list.append(item)
         return sorted(model_list)
+    
+    def _resize_avatar(self, event=None):
+        """
+        Dynamically resize avatar image within min/max limits,
+        maintaining aspect ratio as the window resizes.
+        """
+        try:
+            if not hasattr(self, "original_avatar"):
+                return  # no image loaded yet
+
+            # compute target width based on 20–25% of total window width
+            total_w = self.root.winfo_width()
+            target_w = max(self.avatar_min_size,
+                        min(self.avatar_max_size, total_w // 4))
+            img = self.original_avatar.copy()
+            ratio = target_w / img.width
+            target_h = int(img.height * ratio)
+
+            from PIL import ImageTk
+            resized = img.resize((target_w, target_h), Image.LANCZOS)
+            self.avatar_image = ImageTk.PhotoImage(resized)
+            self.image_label.config(image=self.avatar_image,
+                                    width=target_w,
+                                    height=target_h)
+        except Exception as e:
+            print(f"[WARN] Avatar resize failed: {e}")
 
     def insert_chat_image(self, image_path: str):
         """
@@ -992,7 +1031,8 @@ class App:
         
     def change_avatar(self):
         """
-        Allow user to choose a new avatar image while maintaining fixed display size.
+        Allow user to choose a new avatar image, scale it to fixed bounds,
+        update display immediately, and persist the path to settings.json.
         """
         file_path = filedialog.askopenfilename(
             title="Select Avatar Image",
@@ -1004,30 +1044,28 @@ class App:
         try:
             from PIL import Image, ImageTk
 
-            target_width = 512
-            target_height = 512
-
+            # open the selected image
             img = Image.open(file_path)
-            img.thumbnail((target_width, target_height), Image.LANCZOS)
 
-            from PIL import ImageOps
-            fixed_img = Image.new("RGBA", (target_width, target_height), (0, 0, 0, 0))
-            img_x = (target_width - img.width) // 2
-            img_y = (target_height - img.height) // 2
-            fixed_img.paste(img, (img_x, img_y))
+            # store as new original for resizing
+            self.original_avatar = img.copy()
 
-            self.image = ImageTk.PhotoImage(fixed_img)
-            self.image_label.config(image=self.image, width=target_width, height=target_height)
+            # immediately render resized version
+            self._resize_avatar()
 
-            # --- ✅ persist new avatar path in memory + settings.json ---
+            # update config for persistence
+            self.config["app"]["avatar_image"] = file_path
             self.current_image_path = file_path
-            self.config["app"]["avatar_image"] = file_path  # update in-memory settings
 
+            # save config safely
+            from app_core.config_manager import ConfigManager
             cfg = ConfigManager()
-            cfg.data = self.config  # assign the current updated config
-            cfg.save()              # write to config/settings.json
+            cfg.data = self.config
+            cfg.save()
 
-            self.custom_message_popup("Avatar Changed", "AI avatar updated successfully and saved.")
+            self.custom_message_popup("Avatar Changed", "AI avatar updated successfully.")
+            print(f"[INFO] Avatar updated to {file_path}")
+
         except Exception as e:
             self.custom_message_popup("Error", f"Failed to change avatar: {e}", msg_type="error")
         

@@ -102,7 +102,7 @@ def generate_image(
 
     if init_image and os.path.exists(init_image):
         print(f"[INFO] Running image-to-image using avatar: {init_image}")
-        pipe = StableDiffusionImg2ImgPipeline.from_single_file(model_path, torch_dtype=torch_dtype).to(device)
+        pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(model_name, **_pipeline_kwargs()).to(device)
         image = Image.open(init_image).convert("RGB").resize(size)
         result = pipe(
             prompt=prompt,
@@ -115,7 +115,7 @@ def generate_image(
         )
     else:
         print(f"[INFO] Running text-to-image (no init).")
-        pipe = StableDiffusionPipeline.from_single_file(model_path, torch_dtype=torch_dtype).to(device)
+        pipe = StableDiffusionPipeline.from_single_file(model_path, dtype=torch_dtype).to(device)
         result = pipe(
             prompt=prompt,
             guidance_scale=guidance,
@@ -131,6 +131,14 @@ def generate_image(
         progress_callback(100)
     print(f"[INFO] Image saved: {out_path} | Seed: {seed}")
     return out_path
+
+def _pipeline_kwargs():
+    import inspect
+    # Check which parameter is accepted by your current diffusers version
+    if "dtype" in inspect.signature(StableDiffusionPipeline.from_single_file).parameters:
+        return {"dtype": torch.float16 if torch.cuda.is_available() else torch.float32}
+    else:
+        return {"torch_dtype": torch.float16 if torch.cuda.is_available() else torch.float32}
 
 def generate_image_diffusers(
     prompt,
@@ -161,7 +169,7 @@ def generate_image_diffusers(
     if os.path.isdir(model_name) or "xl" in model_name_lower:
         if init_image and os.path.exists(init_image):
             print(f"[INFO] Loading SDXL Img2Img pipeline from {model_name}")
-            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(model_name, torch_dtype=torch_dtype).to(device)
+            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(model_name, **_pipeline_kwargs()).to(device)
             image = Image.open(init_image).convert("RGB").resize(size)
             result = pipe(
                 prompt=prompt,
@@ -174,7 +182,7 @@ def generate_image_diffusers(
             )
         else:
             print(f"[INFO] Loading SDXL pipeline from {model_name}")
-            pipe = StableDiffusionXLPipeline.from_pretrained(model_name, torch_dtype=torch_dtype).to(device)
+            pipe = StableDiffusionXLPipeline.from_pretrained(model_name, dtype=torch_dtype).to(device)
             result = pipe(
                 prompt=prompt,
                 guidance_scale=guidance,
@@ -187,7 +195,7 @@ def generate_image_diffusers(
     else:
         if init_image and os.path.exists(init_image):
             print(f"[INFO] Loading SD 1.x Img2Img pipeline from {model_name}")
-            pipe = StableDiffusionImg2ImgPipeline.from_single_file(model_name, torch_dtype=torch_dtype).to(device)
+            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(model_name, **_pipeline_kwargs()).to(device)
             image = Image.open(init_image).convert("RGB").resize(size)
             result = pipe(
                 prompt=prompt,
@@ -200,7 +208,7 @@ def generate_image_diffusers(
             )
         else:
             print(f"[INFO] Loading SD 1.x pipeline from {model_name}")
-            pipe = StableDiffusionPipeline.from_single_file(model_name, torch_dtype=torch_dtype).to(device)
+            pipe = StableDiffusionPipeline.from_single_file(model_name, dtype=torch_dtype).to(device)
             result = pipe(
                 prompt=prompt,
                 guidance_scale=guidance,

@@ -8,11 +8,11 @@ _DEFAULT = {
         "theme": "dark"
     },
     "chat_model": {
-        "folder": "models/chat_model",
+        "folder": "chat_model",
         "last_used": "DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf"
     },
     "image_model": {
-        "folder": "models/image_model",
+        "folder": "image_model",
         "last_used": "stable-diffusion-v1-5-pruned-emaonly-Q8_0.gguf"
     },
     "image_settings": {
