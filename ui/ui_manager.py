@@ -33,7 +33,11 @@ import threading
 import os
 
 from PIL import Image, ImageTk
-from vision.image_gen import list_available_models
+from vision.image_gen import (
+    list_available_models,
+    generate_image_diffusers,
+    clear_pipeline_cache
+)
 from app_core.config_manager import ConfigManager
 from pathlib import Path
 
@@ -62,7 +66,6 @@ class App:
     The App class defines the GUI layout and event handlers.
     It is initialized with a root Tkinter window and a LlmService.
     """
-
     def __init__(self, root: tk.Tk, service: LlmService):
         """
         Constructor initializes the window, builds the layout,
@@ -71,9 +74,10 @@ class App:
         # hold references to the Tk root and the business service
         self.root = root
         self.service = service
+        self.service.ui = self
         
-        self.avatar_min_size = (128, 128)
-        self.avatar_max_size = (512, 512)
+        self.avatar_min_size = 256
+        self.avatar_max_size = 512
 
         # set base background and foreground
         self.root.option_add("*Background", "#2b2b2b")      # dark gray background
@@ -156,91 +160,100 @@ class App:
         self.avatar_max_size = 512    # maximum dimension
 
         # Track current displayed image separately
-        self.avatar_image = None
+        self.avatar_image = self.config["app"]["avatar_image"]
 
         # Bind resize event
         self.root.bind("<Configure>", self._resize_avatar)
 
-        # --- Bottom control panel under avatar ---
-        controls_frame = tk.Frame(left_frame)
-        controls_frame.pack(side="bottom", fill="x", pady=(8, 5))
+        # --- Bottom Controls Container ---
+        controls_container = tk.Frame(left_frame)
+        controls_container.pack(side="bottom", fill="x", pady=(8, 5))
 
-        # Row 1 — audio + dropdown + buttons
-        controls_frame.columnconfigure(0, weight=0)  # audio
-        controls_frame.columnconfigure(1, weight=1)  # dropdown
-        controls_frame.columnconfigure(2, weight=0)
-        controls_frame.columnconfigure(3, weight=0)
-        controls_frame.columnconfigure(4, weight=0)
-        controls_frame.columnconfigure(5, weight=0)
+        # --- Row 1: Audio + Clear + Settings + Generate ---
+        row1 = tk.Frame(controls_container)
+        row1.pack(fill="x", pady=(2, 3))
 
-        # Audio checkbox (bottom-left)
+        # Audio checkbox
         self.audio_var = tk.BooleanVar(value=False)
-        audio_chk = tk.Checkbutton(
-            controls_frame,
+        tk.Checkbutton(
+            row1,
             text="Audio",
             variable=self.audio_var,
-            command=lambda: self.service.tts.set_enabled(self.audio_var.get())
-        )
-        audio_chk.grid(row=0, column=0, sticky="w", padx=(5, 10))
-        
-        repo_root = Path(__file__).resolve().parents[1]
-        model_dir = repo_root / "models" / self.config["image_model"]["folder"]
-        model_dir = Path(model_dir)
-        models = list_available_models(str(model_dir))
-
-        # Build mapping: name → full path
-        self.model_path_map = {os.path.basename(m): str(Path(model_dir) / m) for m in models}
-        model_names = list(self.model_path_map.keys())
-
-        self.image_model_var = tk.StringVar(value=self.config["image_model"]["last_used"] or (model_names[0] if model_names else ""))
-        self.model_dropdown = ttk.Combobox(
-            controls_frame,
-            textvariable=self.image_model_var,
-            values=model_names,
-            state="readonly",
-            width=28
-        )
-        self.model_dropdown.grid(row=0, column=1, sticky="ew", padx=(2, 2))
-
-        # Settings ⚙ button
-        tk.Button(
-            controls_frame,
-            text="⚙",
-            width=4,
-            command=self.open_image_settings
-        ).grid(row=0, column=2, sticky="ew", padx=(2, 2))
-
-        # Current image guidance checkbox
-        self.use_guidance_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(
-            controls_frame,
-            text="Use Current Image",
-            variable=self.use_guidance_var
-        ).grid(row=0, column=3, sticky="w", padx=(4, 8))
+            command=lambda: self.toggle_audio(self.audio_var.get())
+        ).pack(side="left", padx=(5, 8))
 
         # Clear Images button
         tk.Button(
-            controls_frame,
+            row1,
             text="🗑 Clear",
             width=7,
             command=self.clear_embedded_images
-        ).grid(row=0, column=4, sticky="ew", padx=(4, 4))
+        ).pack(side="left", padx=(2, 6))
 
-        # Generate Image button
+        # Image Settings button
         tk.Button(
-            controls_frame,
+            row1,
+            text="⚙",
+            width=4,
+            command=self.open_image_settings
+        ).pack(side="left", padx=(2, 6))
+
+        # Generate button
+        tk.Button(
+            row1,
             text="🖼 Generate",
             width=9,
-            command=lambda: self.generate_image_from_prompt(self.image_model_var)
-        ).grid(row=0, column=5, sticky="ew", padx=(4, 6))
+            command=self.generate_image_from_prompt
+        ).pack(side="left", padx=(2, 6))
 
-        # Row 2 — Progress bar
+        # --- Row 2: Dropdown + checkboxes ---
+        self.use_guidance_var = tk.BooleanVar(value=False)
+        self.use_controlnet_var = tk.BooleanVar(value=False)
+        self.use_multilayer_var = tk.BooleanVar(value=False)
+
+        row2 = tk.Frame(controls_container)
+        row2.pack(fill="x", pady=(2, 3))
+
+        # Dropdown
+        self.image_model_var = tk.StringVar(value="uncanny-valley-vpred-v1-sdxl")
+        model_options = self.get_available_models()
+        self.model_dropdown = ttk.Combobox(
+            row2,
+            textvariable=self.image_model_var,
+            values=model_options,
+            state="readonly",
+            width=28
+        )
+        self.model_dropdown.pack(side="left", fill="x", expand=True, padx=(5, 10))
+
+        # Use Current Image
+        tk.Checkbutton(
+            row2,
+            text="Use Current Image",
+            variable=self.use_guidance_var
+        ).pack(side="left", padx=(5, 8))
+
+        # ControlNet toggle
+        tk.Checkbutton(
+            row2,
+            text="ControlNet",
+            variable=self.use_controlnet_var
+        ).pack(side="left", padx=(5, 8))
+
+        # Multi-layer toggle
+        tk.Checkbutton(
+            row2,
+            text="Multi-Layer",
+            variable=self.use_multilayer_var
+        ).pack(side="left", padx=(5, 8))
+
+        # Progress bar (below both rows)
         self.progress = ttk.Progressbar(
-            controls_frame,
+            controls_container,
             orient="horizontal",
             mode="determinate"
         )
-        self.progress.grid(row=1, column=0, columnspan=6, sticky="ew", pady=(6, 3), padx=(5, 5))
+        self.progress.pack(fill="x", padx=(5, 5), pady=(5, 5))
         self.progress["value"] = 0
 
         # ----- RIGHT SIDE -----
@@ -342,9 +355,8 @@ class App:
         self.root.resizable(True, True)
 
     # ------------------- HELPERS -------------------
-
     def get_available_models(self):
-        model_dir = self.config["image_model"]["folder"]
+        model_dir = ConfigManager().get_model_dir("image_model")
         model_list = []
         for item in os.listdir(model_dir):
             full = os.path.join(model_dir, item)
@@ -363,8 +375,7 @@ class App:
 
             # compute target width based on 20–25% of total window width
             total_w = self.root.winfo_width()
-            target_w = max(self.avatar_min_size,
-                        min(self.avatar_max_size, total_w // 4))
+            target_w = max(self.avatar_min_size, min(self.avatar_max_size, total_w // 4))
             img = self.original_avatar.copy()
             ratio = target_w / img.width
             target_h = int(img.height * ratio)
@@ -419,6 +430,35 @@ class App:
         except Exception as e:
             print(f"[WARN] Failed to clear images: {e}")
             
+    def clear_model_cache(self):
+        """
+        Clear cached pipelines to free GPU memory.
+        Shows a popup confirmation once complete.
+        """
+        try:
+            clear_pipeline_cache()
+            self.custom_message_popup("Cache Cleared", "All cached models have been released from memory.")
+        except Exception as e:
+            self.show_async_error("Cache Clear Failed", e)
+
+    def edit_positive_prompt(self):
+        path = "positive_prompt.txt"
+        current = open(path, "r", encoding="utf-8").read() if os.path.exists(path) else ""
+        new = self.custom_input_popup("Edit Positive Prompt", current, "Save", show_cancel=True, multiline=True)
+        if new:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new)
+            self.custom_message_popup("Saved", "Positive prompt updated.")
+
+    def edit_negative_prompt(self):
+        path = "negative_prompt.txt"
+        current = open(path, "r", encoding="utf-8").read() if os.path.exists(path) else ""
+        new = self.custom_input_popup("Edit Negative Prompt", current, "Save", show_cancel=True, multiline=True)
+        if new:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new)
+            self.custom_message_popup("Saved", "Negative prompt updated.")
+
     def show_async_error(self, title: str, exception: Exception):
         """
         Safely display an exception message from a background thread.
@@ -426,7 +466,6 @@ class App:
         import traceback
         tb = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
         self.root.after(0, lambda: self.custom_message_popup(title, tb, msg_type="error"))
-
     
     def custom_input_popup(
     self,
@@ -588,19 +627,6 @@ class App:
         ok_button.focus_set()
         popup.bind("<Return>", lambda event=None: popup.destroy())
         return popup
-
-    def render_summary(self) -> None:
-        """
-        Render the latest entries (summary) in the bottom output box.
-        """
-        summary = self.service.summary()
-
-        # update summary box
-        self.summary_box.config(state="normal")
-        self.summary_box.delete("1.0", tk.END)
-        for val in summary.values():
-            self.summary_box.insert(tk.END, f"{val}\n")
-        self.summary_box.config(state="disabled")
 
     def clear_placeholder(self, event):
         """
@@ -781,6 +807,18 @@ class App:
         """
         self._handle_ai_input(user_input)
 
+    def toggle_controlnet(self, enabled):
+        self.use_controlnet_var.set(enabled)
+        print(f"[INFO] ControlNet {'enabled' if enabled else 'disabled'}")
+
+    def toggle_multilayer(self, enabled):
+        self.use_multilayer_var.set(enabled)
+        print(f"[INFO] Multi-layer {'enabled' if enabled else 'disabled'}")
+    
+    def update_progress(self, value):
+        self.progress["value"] = value
+        self.root.update_idletasks()
+
     # ------------------- EVENT HANDLERS -------------------
     def on_add_or_edit_entry(self, entry_type: EntryType):
         """
@@ -848,7 +886,14 @@ class App:
         prompt_menu.add_command(label="View/Edit Prompt", command=self.edit_prompt)
         prompt_menu.add_command(label="Save Prompt", command=self.save_prompt)
         prompt_menu.add_command(label="Current Prompt", command=self.load_prompt)
+        prompt_menu.add_separator()
+        prompt_menu.add_command(label="Edit Positive Prompt", command=self.edit_positive_prompt)
+        prompt_menu.add_command(label="Edit Negative Prompt", command=self.edit_negative_prompt)
         menubar.add_cascade(label="Prompt", menu=prompt_menu)
+
+        cache_menu = tk.Menu(menubar, tearoff=0) 
+        cache_menu.add_command(label="Clear Model Cache", command=self.clear_model_cache)
+        menubar.add_cascade(label="Cache", menu=cache_menu)
 
         # session controls
         session_menu = tk.Menu(menubar, tearoff=0)
@@ -988,7 +1033,6 @@ class App:
 
         text_area.config(state="disabled")
 
-
     def load_llm(self):
         """
         Allows the user to select and load a different local LLM (GGUF file).
@@ -1064,7 +1108,12 @@ class App:
             cfg.save()
 
             self.custom_message_popup("Avatar Changed", "AI avatar updated successfully.")
-            print(f"[INFO] Avatar updated to {file_path}")
+            # --- Sync avatar path to config and memory ---
+            self.current_image_path = file_path
+            cfg = ConfigManager().load()
+            cfg["app"]["avatar_image"] = file_path
+            ConfigManager().save(cfg)
+            print(f"[INFO] Updated avatar path: {file_path}")
 
         except Exception as e:
             self.custom_message_popup("Error", f"Failed to change avatar: {e}", msg_type="error")
@@ -1089,7 +1138,7 @@ class App:
             self.custom_message_popup("Prompt Saved", "System prompt updated successfully.")
             # refresh LLM context to apply new system prompt immediately
             if hasattr(self.service, "responses") and hasattr(self.service.responses, "reset_context"):
-                self.service.responses.reset_context(system_prompt=new_prompt)
+                self.service.reset_context(system_prompt=new_prompt)
                 self.custom_message_popup("Prompt Applied", "New prompt applied to current chat session.")
 
     def save_prompt(self):
@@ -1194,48 +1243,33 @@ class App:
 
         tk.Button(win, text="Save", command=save).grid(row=len(labels), column=0, columnspan=2, pady=10)
             
-    def generate_image_from_prompt(self, model_name):
-        prompt_text = self.ai_entry.get().strip()
-        init_img = None
-        # if you want to pass current avatar when the checkbox is on:
-        if getattr(self, "use_guidance_var", None) and self.use_guidance_var.get():
-            # wire this to a current avatar path if/when you manage one on disk
-            avatar_path = self.config["app"].get("avatar_image")
-            if avatar_path and os.path.exists(avatar_path):
-                init_img = avatar_path
-                print(f"[DEBUG] Using current avatar as init image: {avatar_path}")
-        self.config = ConfigManager().load()
-        # run on a worker thread so UI stays responsive
+    def generate_image_from_prompt(self):
+        self.progress["value"] = 0
         def run():
             try:
                 def on_progress(p):
                     self.root.after(0, lambda: self.progress.configure(value=p))
-                selected_name = self.image_model_var.get()
-                model_path = self.model_path_map[selected_name]
+
+                prompt_text = self.ai_entry.get().strip()
+                init_img = self.avatar_image if self.use_guidance_var.get() else None
+
                 path = self.service.generate_concept_image(
                     user_text=prompt_text,
                     steps=self.img_settings["steps"],
                     guidance=self.img_settings["guidance"],
                     width=self.img_settings["width"],
                     height=self.img_settings["height"],
-                    model_name=model_path,
+                    model_name=self.image_model_var.get(),
                     style=self.img_settings["style"],
+                    init_image=init_img,
+                    use_controlnet=self.use_controlnet_var.get(),
+                    use_multilayer=self.use_multilayer_var.get(),
                     progress_callback=on_progress,
-                    init_image=init_img
                 )
-                # --- Embed generated image into chat output ---
                 self.root.after(0, lambda: self.insert_chat_image(path))
-
-                # Optionally, log that an image was added
-                self.root.after(0, lambda: [
-                    self.ai_output_box.config(state="normal"),
-                    self.ai_output_box.insert(tk.END, f"[Image generated: {os.path.basename(path)}]\n\n"),
-                    self.ai_output_box.config(state="disabled"),
-                    self.ai_output_box.see(tk.END)
-                ])
-
+                self.root.after(1000, lambda: self.progress.configure(value=0))
             except Exception as e:
-                self.show_async_error("Image Generation Failed", e)
+                self.show_async_error("Image generation failed", e)
             finally:
                 self.root.after(0, lambda: self.progress.configure(value=0))
 

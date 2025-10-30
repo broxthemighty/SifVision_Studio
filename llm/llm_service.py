@@ -16,43 +16,30 @@ import random
 
 def resolve_model_path(model_name: str, model_type: str = "chat") -> str:
     """
-    Resolves an absolute path to a given model file, ensuring no duplicate folder nesting.
+    Resolve the full absolute path for a model (chat_model or image_model)
+    using the new settings.json structure.
     Example:
-        model_type="image" and settings["image_model"]["folder"]="models/image_model"
-        will yield: <repo_root>/models/image_model/<model_name>
+        resolve_model_path("uncanny-valley-vpred-v1-sdxl", "image")
+        -> C:/.../SifVision_Studio/models/image_model/uncanny-valley-vpred-v1-sdxl
     """
-    cfg = ConfigManager().load()
-    repo_root = Path(__file__).resolve().parents[1]
+    cfg_mgr = ConfigManager()
 
-    folder = Path(cfg[f"{model_type}_model"]["folder"])
-    base_dir = repo_root / folder
+    # Resolve base model directory (e.g., models/chat_model)
+    base_dir = cfg_mgr.get_model_dir(f"{model_type}_model")
+    model_path = Path(base_dir) / model_name
 
-    # 1️⃣ If an absolute file path is provided
-    if os.path.isabs(model_name) and os.path.exists(model_name):
-        return model_name
+    # Handle .gguf or other model extensions if missing
+    if not model_path.exists():
+        # Optionally check for .gguf fallback
+        possible_files = list(Path(base_dir).glob(f"{model_name}*"))
+        if possible_files:
+            model_path = possible_files[0]
+        else:
+            raise FileNotFoundError(
+                f"Model '{model_name}' not found in {base_dir}"
+            )
 
-    # 2️⃣ If the model exists in the configured folder
-    candidate = base_dir / model_name
-    if candidate.exists():
-        return str(candidate)
-
-    # 3️⃣ Search recursively in the configured folder
-    if base_dir.exists():
-        for root, _, files in os.walk(base_dir):
-            for f in files:
-                if f.lower() == model_name.lower():
-                    return str(Path(root) / f)
-
-    # 4️⃣ Final fallback — models/image_model or models/chat_model only ONCE
-    fallback = repo_root / "models" / f"{model_type}_model" / model_name
-    if fallback.exists():
-        return str(fallback)
-
-    # 5️⃣ Throw clear diagnostic
-    checked = "\n  ".join(str(x) for x in [candidate, fallback])
-    raise FileNotFoundError(
-        f"Model file not found.\nChecked:\n  {checked}\nBase dir: {base_dir}\nCWD: {os.getcwd()}"
-    )
+    return str(model_path.resolve())
 
 class LlmService:
     """
@@ -70,20 +57,22 @@ class LlmService:
 
         cfg_path = Path(__file__).resolve().parents[1] / "config" / "settings.json"
         print(f"[DEBUG] Expected config path: {cfg_path}")
-        cfg = ConfigManager().load()
-        print(f"[DEBUG] Loaded config data: {cfg}")
+        cfg_mgr = ConfigManager()
+        cfg = cfg_mgr.load()
 
-        cfg = ConfigManager().load()
-        chat_model_name = cfg["chat_model"].get("last_used", "").strip()
+        # Get the last used chat model name from new structure
+        chat_model_name = cfg.get("last_used", {}).get("chat_model", "").strip()
 
         if not chat_model_name:
-            raise ValueError("No chat model configured in settings.json (chat_model.last_used is empty).")
+            raise ValueError(
+                "No chat model configured in settings.json (last_used.chat_model is empty)."
+            )
 
-        model_path = resolve_model_path(chat_model_name, "chat")
+        # Resolve absolute path based on new models section
+        model_path = resolve_model_path(chat_model_name, model_type="chat")
 
         if not os.path.isfile(model_path):
             raise FileNotFoundError(f"Resolved chat model path is not a file: {model_path}")
-
         self._state = state or LlmState()
         self.responses = LlamaEngine(model_path=model_path)  # full ai replies
         prompt_text = self.get_prompt() # pull the prompt text
@@ -384,8 +373,21 @@ class LlmService:
         style=None,
         progress_callback=None,
         init_image: str | None = None,
+        use_controlnet: bool = False,   
+        use_multilayer: bool = False,
     ) -> str:
         text = (user_text or "").strip()
+        # Detect if model is SDXL-family (folder or name)
+        is_sdxl = "xl" in model_name.lower() or os.path.isdir(model_name)
+
+        # Auto-assign a refiner if XL and multilayer is enabled
+        model_refiner = None
+        if is_sdxl and use_multilayer:
+            refiner_dir = Path(ConfigManager().get_model_dir("image_model")) / "sdxl_refiner"
+            if refiner_dir.exists():
+                model_refiner = str(refiner_dir)
+            else:
+                model_refiner = "stabilityai/stable-diffusion-xl-refiner-1.0"
         # --- Make image prompt context-aware ---
         if not user_text:
             if getattr(self.responses, "context", None):
@@ -410,52 +412,66 @@ class LlmService:
                     return f.read().strip()
             return ""
 
-        positive = f"{read_prompt(positive_path)}, Concept: {user_text}, full body, {style or 'realistic detailed'}"
+        positive = f"{read_prompt(positive_path)}, Concept: {user_text}, consistent character, same person, full body, {style or 'realistic detailed'}"
         negative = f"{read_prompt(negative_path)}, cropped, close-up, duplicate, deformed"
 
         cfg = ConfigManager().load()
         avatar_path = cfg["app"].get("avatar_image")
 
-        init_image = None
         if avatar_path and os.path.exists(avatar_path):
             init_image = avatar_path
 
         # optionally free VRAM before SD
         self.suspend_llm()
-        strength = 0.45 if init_image else 0.0
+        strength = 0.35 if init_image else 0.0
         try:
             # Resolve model path dynamically
             try:
                 model_path = resolve_model_path(model_name, model_type="image")
             except FileNotFoundError as e:
                 raise FileNotFoundError(f"Image model could not be resolved: {e}")
-            if model_name.endswith(".gguf"):
-                # Use C++ CLI generator (fast quantized)
-                path = generate_image(
+            if use_multilayer:
+                from vision.image_gen import generate_multilayer_image
+                path = generate_multilayer_image(
                     prompt=positive,
+                    init_image=init_image,
+                    model_base=model_path,
+                    model_refiner=model_refiner,
                     steps=steps,
                     guidance=guidance,
                     size=(width, height),
-                    model_name=model_path,
-                    progress_callback=progress_callback,
                     negative_prompt=negative,
-                    seed = random.randint(0, 999999),
-                    init_image=init_image,
-                    style=style
+                    strength=strength,
+                    progress_callback=lambda v: self.ui.root.after(0, lambda: self.ui.progress.config(value=v)),
                 )
-            else:
-                # Use Diffusers pipeline (PyTorch)
+            elif use_controlnet:
                 path = generate_image_diffusers(
                     prompt=positive,
                     steps=steps,
                     guidance=guidance,
                     size=(width, height),
                     model_name=model_path,
-                    progress_callback=progress_callback,
                     negative_prompt=negative,
-                    seed = random.randint(0, 999999),
+                    seed=random.randint(0, 999999),
                     init_image=init_image,
-                    style=style
+                    style=style,
+                    strength=strength,
+                    use_controlnet=True,
+                    progress_callback=lambda v: self.ui.root.after(0, lambda: self.ui.progress.config(value=v)),
+                )
+            else:
+                path = generate_image_diffusers(
+                    prompt=positive,
+                    steps=steps,
+                    guidance=guidance,
+                    size=(width, height),
+                    model_name=model_path,
+                    negative_prompt=negative,
+                    seed=random.randint(0, 999999),
+                    init_image=init_image,
+                    style=style,
+                    strength=strength,
+                    progress_callback=lambda v: self.ui.root.after(0, lambda: self.ui.progress.config(value=v)),
                 )
         finally:
             self.resume_llm()

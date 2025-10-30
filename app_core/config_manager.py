@@ -32,6 +32,18 @@ class ConfigManager:
         self.path = Path(path)
         self.data = {}
 
+    def get_model_dir(self, model_type: str) -> Path:
+        """Return an absolute folder path for image_model or chat_model."""
+        models_root = self.data.get("models", {}).get("base_folder", "models")
+        sub_folder = self.data.get("models", {}).get(model_type, model_type)
+        repo_root = Path(__file__).resolve().parents[1]
+        path = (repo_root / models_root / sub_folder).resolve()
+        os.makedirs(path, exist_ok=True)
+        return path
+    
+    def get_last_used_model(self, model_type: str) -> str:
+        return self.data.get("last_used", {}).get(model_type, "")
+
     def load(self):
         if not self.path.exists():
             self._write(_DEFAULT)
