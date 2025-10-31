@@ -1,0 +1,33 @@
+{
+    "app": {
+        "avatar_image": "C:/Users/Matt-Beast/source/repos/SifVision_Studio/images/clean.png",
+        "theme": "dark"
+    },
+    "models": {
+        "base_folder": "models",
+        "image_model": "image_model",
+        "chat_model": "chat_model"
+    },
+    "last_used": {
+        "image_model": "uncanny-valley-vpred-v1-sdxl",
+        "chat_model": "DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf"
+    },
+    "image_settings": {
+        "width": 512,
+        "height": 512,
+        "steps": 20,
+        "guidance": 7.5
+    },
+    "prompts": {
+        "positive": "positive_prompt.txt",
+        "negative": "negative_prompt.txt"
+    },
+    "chat_model": {
+        "folder": "chat_model",
+        "last_used": "DarkIdol-Llama-3.1-8B-Instruct-1.2-Uncensored.Q5_K_M.gguf"
+    },
+    "image_model": {
+        "folder": "image_model",
+        "last_used": "uncanny-valley-vpred-v1-sdxl"
+    }
+}
