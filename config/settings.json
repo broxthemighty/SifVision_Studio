@@ -1,6 +1,6 @@
 {
     "app": {
-        "avatar_image": "C:/Users/Matt-Beast/source/repos/SifVision_Studio/images/clean.png",
+        "avatar_image": "C:/Users/black/source/SifVision_Studio/images/image2_50pc.png",
         "theme": "dark"
     },
     "models": {
@@ -28,6 +28,6 @@
     },
     "image_model": {
         "folder": "image_model",
-        "last_used": "uncanny-valley-vpred-v1-sdxl"
+        "last_used": "yomama-25d-illustrious-illustrious-noobai-v10-sdxl"
     }
 }

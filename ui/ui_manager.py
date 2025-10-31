@@ -1264,6 +1264,7 @@ class App:
                     init_image=init_img,
                     use_controlnet=self.use_controlnet_var.get(),
                     use_multilayer=self.use_multilayer_var.get(),
+                    use_current_image=self.use_guidance_var.get(),
                     progress_callback=on_progress,
                 )
                 self.root.after(0, lambda: self.insert_chat_image(path))

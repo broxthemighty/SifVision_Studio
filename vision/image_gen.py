@@ -19,6 +19,7 @@ from diffusers.utils import load_image
 from app_core.config_manager import ConfigManager
 import random
 import cv2
+import gc
 import numpy as np
 
 # current file's directory
@@ -213,9 +214,6 @@ def generate_image_diffusers(
     """
     Generate an image using Diffusers-based models (.safetensors or folders).
     """
-    total_stages = 3 if use_controlnet else 1
-    current_stage = 0
-
     os.makedirs(output_dir, exist_ok=True)
     out_path = os.path.join(output_dir, f"generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
     torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
@@ -247,13 +245,25 @@ def generate_image_diffusers(
             ControlNetModel,
             **_pipeline_kwargs()
         )
-
+        
+        torch.cuda.empty_cache()
+        gc.collect()
+        
         pipe = _get_cached_pipeline(
             model_name,
             pipe_class,
             controlnet=controlnet,
             **_pipeline_kwargs()
         ).to(device)
+        gen_device = "cuda" if torch.cuda.is_available() else "cpu"
+        generator = torch.Generator(gen_device).manual_seed(seed)
+        pipe.enable_model_cpu_offload()
+        pipe.enable_attention_slicing()
+        pipe.enable_vae_tiling()
+        try:
+            pipe.enable_xformers_memory_efficient_attention()
+        except Exception:
+            pass
 
         # --- Sanity check: cross-attention dims must match
         try:
@@ -292,10 +302,17 @@ def generate_image_diffusers(
         if os.path.isdir(model_name) or "xl" in model_name_lower:
             if init_image and os.path.exists(init_image):
                 print(f"[INFO] Loading SDXL Img2Img pipeline from {model_name}")
+                torch.cuda.empty_cache()
+                gc.collect()
                 pipe = _get_cached_pipeline(model_name, StableDiffusionXLImg2ImgPipeline, **_pipeline_kwargs()).to(device)
                 try:
-                    pipe.enable_vae_tiling()
+                    pipe.enable_model_cpu_offload()
                     pipe.enable_attention_slicing()
+                    pipe.enable_vae_tiling()
+                    try:
+                        pipe.enable_xformers_memory_efficient_attention()
+                    except Exception:
+                        pass
                     # If using IP-Adapter or ControlNet face reference
                     if "ip-adapter" in model_name.lower():
                         from diffusers import IPAdapter
@@ -316,7 +333,16 @@ def generate_image_diffusers(
                     progress_callback(50)
             else:
                 print(f"[INFO] Loading SDXL pipeline from {model_name}")
+                torch.cuda.empty_cache()
+                gc.collect()
                 pipe = _get_cached_pipeline(model_name, StableDiffusionXLPipeline, **_pipeline_kwargs()).to(device)
+                pipe.enable_model_cpu_offload()
+                pipe.enable_attention_slicing()
+                pipe.enable_vae_tiling()
+                try:
+                    pipe.enable_xformers_memory_efficient_attention()
+                except Exception:
+                    pass
                 result = pipe(
                     prompt=prompt,
                     guidance_scale=guidance,
@@ -332,7 +358,16 @@ def generate_image_diffusers(
         else:
             if init_image and os.path.exists(init_image):
                 print(f"[INFO] Loading SD 1.x Img2Img pipeline from {model_name}")
+                torch.cuda.empty_cache()
+                gc.collect()
                 pipe = _get_cached_pipeline(model_name, StableDiffusionImg2ImgPipeline, **_pipeline_kwargs()).to(device)
+                pipe.enable_model_cpu_offload()
+                pipe.enable_attention_slicing()
+                pipe.enable_vae_tiling()
+                try:
+                    pipe.enable_xformers_memory_efficient_attention()
+                except Exception:
+                    pass
                 image = Image.open(init_image).convert("RGB").resize(size)
                 result = pipe(
                     prompt=prompt,
@@ -347,7 +382,16 @@ def generate_image_diffusers(
                     progress_callback(50)
             else:
                 print(f"[INFO] Loading SD 1.x pipeline from {model_name}")
+                torch.cuda.empty_cache()
+                gc.collect()
                 pipe = _get_cached_pipeline(model_name, StableDiffusionPipeline, **_pipeline_kwargs()).to(device)
+                pipe.enable_model_cpu_offload()
+                pipe.enable_attention_slicing()
+                pipe.enable_vae_tiling()
+                try:
+                    pipe.enable_xformers_memory_efficient_attention()
+                except Exception:
+                    pass
                 result = pipe(
                     prompt=prompt,
                     guidance_scale=guidance,

@@ -359,6 +359,7 @@ class LlmService:
         try:
             print("[INFO] Resuming LLM GPU context...")
             torch.cuda.empty_cache()
+            gc.collect()
         except Exception as e:
             print(f"[WARN] Could not resume LLM: {e}")
 
@@ -375,6 +376,7 @@ class LlmService:
         init_image: str | None = None,
         use_controlnet: bool = False,   
         use_multilayer: bool = False,
+        use_current_image: bool = False,
     ) -> str:
         text = (user_text or "").strip()
         # Detect if model is SDXL-family (folder or name)
@@ -418,11 +420,15 @@ class LlmService:
         cfg = ConfigManager().load()
         avatar_path = cfg["app"].get("avatar_image")
 
-        if avatar_path and os.path.exists(avatar_path):
+        # Only use avatar as init image if checkbox is checked
+        if use_current_image and avatar_path and os.path.exists(avatar_path):
             init_image = avatar_path
+        else:
+            init_image = None
 
         # optionally free VRAM before SD
         self.suspend_llm()
+        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
         strength = 0.35 if init_image else 0.0
         try:
             # Resolve model path dynamically
